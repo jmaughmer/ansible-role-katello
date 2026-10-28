@@ -5,6 +5,12 @@ _katello_supported_distributions:
 _katello_supported_methods:
   - installer
   - foremanctl
+# Enterprise Linux major version of the target host, and the install methods
+# Katello 5.0 publishes for it (EL10 has no foreman-installer-katello).
+_katello_el: "{{ ansible_facts['distribution_major_version'] }}"
+_katello_methods_by_el:
+  "9": [installer, foremanctl]
+  "10": [foremanctl]
 
 _katello_supported_deployments:
   - server

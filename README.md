@@ -1,26 +1,31 @@
 # Katello 5.0 Ansible role
 
 An Ansible role that installs Foreman 5.0 with the Katello 5.0 plugin, or a
-Smart Proxy with content, on RHEL 9 or AlmaLinux 9 (x86_64), with Molecule tests.
+Smart Proxy with content, on RHEL or AlmaLinux 9 and 10 (x86_64), with Molecule tests.
 
 It follows the upstream guide,
 [Installing Foreman Server with Katello 5.0](https://docs.theforeman.org/5.0/Installing_Server/index-katello.html),
-and supports both install methods Katello 5.0 offers on EL9:
+and supports both install methods Katello 5.0 offers:
 
-| `katello_install_method` | What it does |
-| --- | --- |
-| `installer` (default) | RPM install with `foreman-installer --scenario katello` |
-| `foremanctl` | Containerized install (Podman) with `foremanctl deploy` ([guide](https://docs.theforeman.org/5.0/Installing_Server/index-containerized-katello.html)) |
+| `katello_install_method` | What it does | EL9 | EL10 |
+| --- | --- | --- | --- |
+| `installer` | RPM install with `foreman-installer --scenario katello` | yes (default) | no |
+| `foremanctl` | Containerized install (Podman) with `foremanctl deploy` ([guide](https://docs.theforeman.org/5.0/Installing_Server/index-containerized-katello.html)) | yes | yes (default) |
+
+Katello 5.0 does not ship `foreman-installer-katello` for EL10, so on EL10 the
+role defaults to `foremanctl` and rejects `installer`.
 
 ## What the role does
 
-1. Checks the platform (RHEL/AlmaLinux 9, x86_64), the admin password and the hostname format.
+1. Checks the platform (RHEL/AlmaLinux 9 or 10, x86_64), that the install method exists for it, the admin password and the hostname format.
 2. Optionally sets the hostname (`katello_set_hostname`).
 3. Picks the tuning profile and runs pre-flight checks from the guide: RAM and
    cores for that profile (20 GB and 4 for default), 4 GB swap, SELinux not
    disabled, no EPEL, forward and reverse DNS for the FQDN.
 4. On RHEL, enables the BaseOS and AppStream repos with subscription-manager.
-5. Installs the `foreman-release`, `katello-repos` and (installer method) `openvox8-release` repo packages.
+5. Imports the Foreman (and, for the installer method, OpenVox) signing keys,
+   pinned by fingerprint, then installs the `foreman-release`, `katello-repos`
+   and (installer method) `openvox8-release` repo packages for the host's EL version.
 6. Runs `dnf upgrade`, installs chrony, the UTF-8 locale, and `foreman-installer-katello` or `foremanctl`.
 7. Opens the firewall (installer: 8000, 9090, http, https; foremanctl: 8000, 8443, http, https).
    Applies OS tuning (tuned, THP off) and the recommended installer settings.
@@ -447,18 +452,21 @@ katello_usergroups:
 
 ## Testing with Molecule
 
-Molecule runs from the repository root. On Windows, run it in WSL2 (Ubuntu)
-with Docker Desktop's WSL integration turned on; Ansible does not run
-natively on Windows.
+Molecule runs from the repository root. The `default` and `foremanctl`
+scenarios use rootless Podman. On Windows, run them in WSL2 (for example
+AlmaLinux 10 with `podman` installed); Ansible does not run natively on Windows.
 
 ```bash
-molecule test            # default scenario
-molecule test -s full    # full install on a VM
+ansible-galaxy collection install containers.podman   # used by the Podman driver
+molecule test                  # default scenario (EL9, installer)
+molecule test -s foremanctl    # foremanctl on EL10
+MOLECULE_IMAGE=docker.io/almalinux/9-init molecule test -s foremanctl   # foremanctl on EL9
+molecule test -s full          # full install on a VM
 ```
 
 ### `default` scenario (fast, containers)
 
-Uses two `almalinux/9-init` systemd containers: a server (with
+Uses two `almalinux/9-init` systemd containers under Podman: a server (with
 `katello_ssl_mode: selfsigned`) and a smart proxy. A container cannot meet the
 RAM, SELinux and DNS requirements or run the installer, so this scenario sets
 `katello_run_installer: false`, turns the pre-flight checks into warnings and
@@ -487,14 +495,31 @@ skips firewalld. It covers everything up to the installer:
   group that contains itself are rejected; a full users, groups and LDAP
   mapping config is accepted
 
-Override the image with `MOLECULE_IMAGE=...`.
+Override the image with `MOLECULE_IMAGE=...`. It tests the RPM installer, so
+it needs an EL9 image.
+
+### `foremanctl` scenario (fast, containers, EL10 or EL9)
+
+The same setup as `default` (it reuses its `prepare.yml`), but for the
+`foremanctl` method on `almalinux/10-init` by default. On EL10 the method is
+left unset, so the run also checks that the role picks `foremanctl` there. It
+checks that:
+
+- `foreman-release` and `katello-repos` match the host's EL version, the
+  Foreman signing key is imported and `foremanctl` is installed, while
+  `foreman-installer-katello`, `foreman-proxy-content` and the OpenVox repo are not
+- no `custom-hiera.yaml` is written and `foremanctl` did not run
+- chronyd runs, the tuned profile disables THP, and the server's self-signed
+  certificate names the server and verifies against its CA
+- `katello_custom_hiera` with `foremanctl` is rejected, the RPM installer is
+  rejected on EL10 and accepted on EL9
 
 ### `full` scenario (real install, existing VM)
 
 Runs the whole role, including the installer, against a VM you provide
-(RHEL 9 or AlmaLinux 9, 20 GB RAM, 4 cores, 4 GB swap, a resolvable FQDN, SSH
-key access). Molecule does not create or destroy the VM, so use a throwaway
-one.
+(RHEL or AlmaLinux 9, or 10 with `KATELLO_TEST_METHOD=foremanctl`; 20 GB RAM,
+4 cores, 4 GB swap, a resolvable FQDN, SSH key access). Molecule does not
+create or destroy the VM, so use a throwaway one.
 
 ```bash
 export KATELLO_TEST_HOST=katello.example.com

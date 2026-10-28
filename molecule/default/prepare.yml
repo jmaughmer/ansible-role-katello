@@ -10,3 +10,14 @@
           - iproute
           - procps-ng
         state: present
+
+    # A rootless container cannot set the host clock, so chronyd must not try
+    # (-x). The chrony package keeps this file (it is %config(noreplace)).
+    - name: Let chronyd run without changing the clock
+      ansible.builtin.copy:
+        dest: /etc/sysconfig/chronyd
+        content: |
+          OPTIONS="-F 2 -x"
+        owner: root
+        group: root
+        mode: "0644"

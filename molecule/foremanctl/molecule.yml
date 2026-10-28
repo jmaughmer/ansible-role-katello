@@ -1,0 +1,76 @@
+---
+# foremanctl scenario: like "default", but for the containerized foremanctl
+# install method, the only one Katello 5.0 offers on EL10. Prepares two
+# AlmaLinux systemd containers (Podman), a server with a role-generated
+# self-signed certificate and a smart proxy, without running foremanctl.
+# Runs on AlmaLinux 10 by default; MOLECULE_IMAGE=docker.io/almalinux/9-init
+# runs it on AlmaLinux 9.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/requirements.yml
+
+driver:
+  name: podman
+
+platforms:
+  - name: katello-server
+    image: ${MOLECULE_IMAGE:-docker.io/almalinux/10-init}
+    pre_build_image: true
+    hostname: katello.example.test
+    command: /usr/sbin/init
+    systemd: always
+    privileged: true
+  - name: katello-proxy
+    image: ${MOLECULE_IMAGE:-docker.io/almalinux/10-init}
+    pre_build_image: true
+    hostname: proxy.example.test
+    command: /usr/sbin/init
+    systemd: always
+    privileged: true
+
+provisioner:
+  name: ansible
+  env:
+    # The role is the repository itself, so look for it next to the repository.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
+  playbooks:
+    prepare: ../default/prepare.yml
+  inventory:
+    group_vars:
+      all:
+        katello_run_installer: false
+        # A container cannot meet the RAM/SELinux/DNS requirements.
+        katello_preflight_enforce: false
+        # firewalld does not run reliably inside a container.
+        katello_manage_firewall: false
+        katello_upgrade_packages: false
+    host_vars:
+      katello-server:
+        katello_hostname: katello.example.test
+        katello_ssl_mode: selfsigned
+        katello_ssl_selfsigned_key_size: 2048
+        katello_foremanctl_features: [remote_execution]
+        katello_foremanctl_server_aliases: [katello-alias.example.test]
+        katello_tuning: medium
+      katello-proxy:
+        katello_hostname: proxy.example.test
+        katello_deployment: proxy
+        katello_proxy_server: katello-server
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - cleanup
+    - destroy

@@ -1,6 +1,6 @@
 ---
 - name: Verify the server host
-  hosts: katello-alma9
+  hosts: katello-server
   gather_facts: true
   tasks:
     - name: Gather package facts
@@ -82,7 +82,7 @@
           - "'transparent_hugepages=never' in (_katello_test_tuned.content | b64decode)"
 
 - name: Verify the recommended installer settings on the server
-  hosts: katello-alma9
+  hosts: katello-server
   gather_facts: false
   tasks:
     - name: Read custom-hiera.yaml
@@ -105,7 +105,7 @@
           - "'ANSIBLE MANAGED BLOCK (katello role)' in (_katello_test_hiera.content | b64decode)"
 
 - name: Verify the smart proxy host
-  hosts: katello-proxy-alma9
+  hosts: katello-proxy
   gather_facts: true
   tasks:
     - name: Gather package facts
@@ -119,7 +119,11 @@
           - "'katello-repos' in ansible_facts.packages"
           - "'openvox8-release' in ansible_facts.packages"
           - "'foreman-proxy-content' in ansible_facts.packages"
-          - "'foreman-installer-katello' not in ansible_facts.packages"
+          # foreman-proxy-content requires foreman-installer-katello (it
+          # ships the foreman-proxy-content scenario), but not the server.
+          - "'foreman-installer-katello' in ansible_facts.packages"
+          - "'katello' not in ansible_facts.packages"
+          - "'foreman' not in ansible_facts.packages"
 
     - name: Check that no server certificate was generated on the proxy
       ansible.builtin.stat:
@@ -139,7 +143,7 @@
       failed_when: _katello_test_proxy_hiera.stdout | default('0') | int != 0
 
 - name: Verify the self-signed certificate
-  hosts: katello-alma9
+  hosts: katello-server
   gather_facts: false
   vars:
     _katello_test_ssl_dir: /root/foreman_cert
@@ -271,7 +275,7 @@
           - not _katello_test_san_passed
 
 - name: Verify input validation
-  hosts: katello-alma9
+  hosts: katello-server
   gather_facts: true
   tasks:
     - name: Run the role with an empty admin password
@@ -537,8 +541,10 @@
         katello_admin_password: changeme123
         katello_deployment: proxy
         katello_hostname: proxy.example.test
-        katello_proxy_server: katello-alma9
+        katello_proxy_server: katello-server
         katello_foreman_proxy_plugins: [remote_execution_script, ansible]
+        # This host's katello_tuning (host_vars) does not apply to proxies.
+        katello_tuning: ""
 
     - name: Run the role as a proxy with a tuning profile
       block:

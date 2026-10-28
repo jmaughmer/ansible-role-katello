@@ -11,8 +11,11 @@ katello_deployment: server
 
 # How to install:
 #   installer  - RPM-based install with foreman-installer --scenario katello
+#                (EL9 only)
 #   foremanctl - containerized install (Podman quadlets) managed by foremanctl
-katello_install_method: installer
+#                (EL9 and EL10)
+# The default is installer on EL9 and foremanctl on EL10.
+katello_install_method: "{{ 'foremanctl' if _katello_el == '10' else 'installer' }}"
 
 # Initial objects. The organization label is generated once and cannot be
 # changed later, so choose the name carefully.
@@ -40,18 +43,27 @@ katello_min_cpus: >-
   {{ _katello_tuning_profiles[_katello_tuning_profile | default('default', true)].cpus
      if katello_deployment == 'server' else 4 }}
 
-# Repositories. Override the URLs to point at an internal mirror.
-katello_foreman_release_rpm: "https://yum.theforeman.org/releases/{{ katello_foreman_version }}/el9/x86_64/foreman-release.rpm"
-katello_repos_rpm: "https://yum.theforeman.org/katello/{{ katello_version }}/katello/el9/x86_64/katello-repos-latest.rpm"
+# Repositories for the host's EL version. Override the URLs to point at an
+# internal mirror.
+katello_foreman_release_rpm: "https://yum.theforeman.org/releases/{{ katello_foreman_version }}/el{{ _katello_el }}/x86_64/foreman-release.rpm"
+katello_repos_rpm: "https://yum.theforeman.org/katello/{{ katello_version }}/katello/el{{ _katello_el }}/x86_64/katello-repos-latest.rpm"
 # Puppet (OpenVox) is only needed for the RPM-based installer.
-katello_openvox_release_rpm: "https://yum.voxpupuli.org/openvox8-release-el-9.noarch.rpm"
+katello_openvox_release_rpm: "https://yum.voxpupuli.org/openvox8-release-el-{{ _katello_el }}.noarch.rpm"
+# Signing keys imported before the release RPMs are installed, so their
+# signatures can be checked. The fingerprints pin the keys; the Foreman key
+# changes with every release, so update both when changing
+# katello_foreman_version, or set a fingerprint to "" to skip the pin.
+katello_foreman_gpg_key: "https://yum.theforeman.org/releases/{{ katello_foreman_version }}/RPM-GPG-KEY-foreman"
+katello_foreman_gpg_fingerprint: 38F3FB92F2F0C352BC9B887935FDA52FFF7D88BF
+katello_openvox_gpg_key: https://yum.voxpupuli.org/GPG-KEY-openvox.pub
+katello_openvox_gpg_fingerprint: 0E26429987002418F9513F2A5FB999C2D62FF3D9
 
 # On RHEL, enable the BaseOS and AppStream repositories with subscription-manager.
 # Turn this off if the host gets its content from somewhere else.
 katello_manage_rhel_repos: true
 katello_rhel_repos:
-  - rhel-9-for-x86_64-baseos-rpms
-  - rhel-9-for-x86_64-appstream-rpms
+  - "rhel-{{ _katello_el }}-for-x86_64-baseos-rpms"
+  - "rhel-{{ _katello_el }}-for-x86_64-appstream-rpms"
 
 # Run "dnf upgrade" before installing, as the documentation asks.
 katello_upgrade_packages: true
