@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: katello
+  namespace: jmaughmer
+  author: Justin Maughmer
+  description: Install Foreman with Katello 5.0 on RHEL 9 or AlmaLinux 9
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+  galaxy_tags:
+    - katello
+    - foreman
+    - satellite
+    - content
+
+dependencies: []

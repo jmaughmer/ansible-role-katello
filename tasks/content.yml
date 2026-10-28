@@ -1,0 +1,100 @@
+---
+- name: Select the products that are not being removed
+  ansible.builtin.set_fact:
+    _katello_active_products: >-
+      {{ (katello_products | rejectattr('state', 'defined') | list)
+         + (katello_products | selectattr('state', 'defined') | rejectattr('state', 'equalto', 'absent') | list) }}
+
+- name: Configure content through the Foreman API
+  module_defaults:
+    group/theforeman.foreman.foreman:
+      server_url: "https://{{ katello_hostname }}"
+      username: "{{ katello_admin_username }}"
+      password: "{{ katello_admin_password }}"
+      validate_certs: "{{ katello_verify_validate_certs | bool }}"
+  block:
+    # The credential text comes from "content", a "file" on the Ansible
+    # controller, or a "url" the controller downloads.
+    - name: Create content credentials
+      theforeman.foreman.content_credential:
+        name: "{{ item.name }}"
+        organization: "{{ item.organization | default(katello_initial_organization) }}"
+        content_type: "{{ item.content_type | default('gpg_key') }}"
+        content: >-
+          {{ item.content if item.content is defined
+             else lookup('ansible.builtin.file', item.file) if item.file is defined
+             else lookup('ansible.builtin.url', item.url, split_lines=false) if item.url is defined
+             else omit }}
+        state: "{{ item.state | default('present') }}"
+      loop: "{{ katello_content_credentials }}"
+      loop_control:
+        label: "{{ item.organization | default(katello_initial_organization) }}: {{ item.name }}"
+
+    - name: Create products
+      theforeman.foreman.product:
+        name: "{{ item.name }}"
+        organization: "{{ item.organization | default(katello_initial_organization) }}"
+        label: "{{ item.label | default(omit) }}"
+        description: "{{ item.description | default(omit) }}"
+        gpg_key: "{{ item.gpg_key | default(omit) }}"
+        ssl_ca_cert: "{{ item.ssl_ca_cert | default(omit) }}"
+        ssl_client_cert: "{{ item.ssl_client_cert | default(omit) }}"
+        ssl_client_key: "{{ item.ssl_client_key | default(omit) }}"
+        sync_plan: "{{ item.sync_plan | default(omit) }}"
+        state: "{{ item.state | default('present') }}"
+      loop: "{{ katello_products }}"
+      loop_control:
+        label: "{{ item.organization | default(katello_initial_organization) }}: {{ item.name }}"
+
+    - name: Create repositories
+      theforeman.foreman.repository:
+        name: "{{ item.1.name }}"
+        product: "{{ item.0.name }}"
+        organization: "{{ item.0.organization | default(katello_initial_organization) }}"
+        content_type: "{{ item.1.content_type | default('yum') }}"
+        url: "{{ item.1.url | default(omit) }}"
+        label: "{{ item.1.label | default(omit) }}"
+        description: "{{ item.1.description | default(omit) }}"
+        gpg_key: "{{ item.1.gpg_key | default(omit) }}"
+        ssl_ca_cert: "{{ item.1.ssl_ca_cert | default(omit) }}"
+        ssl_client_cert: "{{ item.1.ssl_client_cert | default(omit) }}"
+        ssl_client_key: "{{ item.1.ssl_client_key | default(omit) }}"
+        download_policy: "{{ item.1.download_policy | default(omit) }}"
+        mirroring_policy: "{{ item.1.mirroring_policy | default(omit) }}"
+        verify_ssl_on_sync: "{{ item.1.verify_ssl_on_sync | default(omit) }}"
+        upstream_username: "{{ item.1.upstream_username | default(omit) }}"
+        upstream_password: "{{ item.1.upstream_password | default(omit) }}"
+        http_proxy_policy: "{{ item.1.http_proxy_policy | default(omit) }}"
+        http_proxy: "{{ item.1.http_proxy | default(omit) }}"
+        unprotected: "{{ item.1.unprotected | default(omit) }}"
+        os_versions: "{{ item.1.os_versions | default(omit) }}"
+        arch: "{{ item.1.arch | default(omit) }}"
+        checksum_type: "{{ item.1.checksum_type | default(omit) }}"
+        retain_package_versions_count: "{{ item.1.retain_package_versions_count | default(omit) }}"
+        ignorable_content: "{{ item.1.ignorable_content | default(omit) }}"
+        docker_upstream_name: "{{ item.1.docker_upstream_name | default(omit) }}"
+        include_tags: "{{ item.1.include_tags | default(omit) }}"
+        exclude_tags: "{{ item.1.exclude_tags | default(omit) }}"
+        deb_releases: "{{ item.1.deb_releases | default(omit) }}"
+        deb_components: "{{ item.1.deb_components | default(omit) }}"
+        deb_architectures: "{{ item.1.deb_architectures | default(omit) }}"
+        state: "{{ item.1.state | default('present') }}"
+      loop: "{{ _katello_active_products | subelements('repositories', skip_missing=true) }}"
+      loop_control:
+        label: "{{ item.0.name }}: {{ item.1.name }}"
+      no_log: "{{ item.1.upstream_password is defined }}"
+
+    # Syncing can take hours for large repositories and always reports a
+    # change, so it is off unless katello_sync_repositories or a
+    # repository's "sync: true" turns it on.
+    - name: Sync repositories
+      theforeman.foreman.repository_sync:
+        product: "{{ item.0.name }}"
+        repository: "{{ item.1.name }}"
+        organization: "{{ item.0.organization | default(katello_initial_organization) }}"
+      loop: "{{ _katello_active_products | subelements('repositories', skip_missing=true) }}"
+      loop_control:
+        label: "{{ item.0.name }}: {{ item.1.name }}"
+      when:
+        - item.1.sync | default(katello_sync_repositories) | bool
+        - item.1.state | default('present') != 'absent'

@@ -1,0 +1,72 @@
+---
+- name: Gather package facts
+  ansible.builtin.package_facts:
+    manager: rpm
+
+- name: Look up the server hostname
+  ansible.builtin.command:
+    argv: [getent, ahostsv4, "{{ katello_hostname }}"]
+  register: _katello_forward_dns
+  changed_when: false
+  failed_when: false
+
+- name: Look up the server address in reverse
+  ansible.builtin.command:
+    argv: [getent, hosts, "{{ _katello_forward_dns.stdout_lines[0].split()[0] }}"]
+  register: _katello_reverse_dns
+  changed_when: false
+  failed_when: false
+  when: _katello_forward_dns.rc == 0
+
+- name: Check that localhost resolves
+  ansible.builtin.command:
+    argv: [getent, hosts, localhost]
+  register: _katello_localhost_dns
+  changed_when: false
+  failed_when: false
+
+- name: Reset the list of failed pre-flight checks
+  ansible.builtin.set_fact:
+    _katello_preflight_failures: []
+
+- name: Collect failed pre-flight checks
+  vars:
+    _checks:
+      - ok: "{{ ansible_facts['memtotal_mb'] | int >= katello_min_memory_mb | int }}"
+        msg: "At least {{ katello_min_memory_mb }} MB RAM is required (found {{ ansible_facts['memtotal_mb'] }} MB)."
+      - ok: "{{ ansible_facts['swaptotal_mb'] | int >= katello_min_swap_mb | int }}"
+        msg: "At least {{ katello_min_swap_mb }} MB swap is required (found {{ ansible_facts['swaptotal_mb'] }} MB)."
+      - ok: "{{ ansible_facts['processor_vcpus'] | default(ansible_facts['processor_count']) | int >= katello_min_cpus | int }}"
+        msg: "At least {{ katello_min_cpus }} CPU cores are required."
+      - ok: "{{ ansible_facts['selinux']['status'] | default('disabled') != 'disabled' }}"
+        msg: "SELinux must be enforcing or permissive, not disabled."
+      - ok: "{{ 'epel-release' not in ansible_facts['packages'] }}"
+        msg: "EPEL is installed. Systems with EPEL enabled are not supported."
+      - ok: "{{ _katello_forward_dns.rc == 0 }}"
+        msg: "{{ katello_hostname }} does not resolve. Forward DNS is required."
+      - ok: "{{ katello_hostname in (_katello_reverse_dns.stdout | default('')).split() }}"
+        msg: "Reverse DNS for {{ katello_hostname }} does not return the FQDN."
+      - ok: "{{ ansible_facts['fqdn'] == katello_hostname }}"
+        msg: "The system FQDN ({{ ansible_facts['fqdn'] }}) differs from katello_hostname ({{ katello_hostname }})."
+      - ok: "{{ _katello_localhost_dns.rc == 0 }}"
+        msg: "localhost does not resolve."
+  ansible.builtin.set_fact:
+    _katello_preflight_failures: "{{ _katello_preflight_failures + [item.msg] }}"
+  loop: "{{ _checks }}"
+  loop_control:
+    label: "{{ item.msg }}"
+  when: not item.ok | bool
+
+- name: Fail on pre-flight check failures
+  ansible.builtin.fail:
+    msg: "{{ _katello_preflight_failures }}"
+  when:
+    - _katello_preflight_failures | length > 0
+    - katello_preflight_enforce | bool
+
+- name: Warn about pre-flight check failures
+  ansible.builtin.debug:
+    msg: "{{ ['WARNING: pre-flight checks failed, continuing because katello_preflight_enforce is false.'] + _katello_preflight_failures }}"
+  when:
+    - _katello_preflight_failures | length > 0
+    - not katello_preflight_enforce | bool

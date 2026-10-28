@@ -1,0 +1,27 @@
+---
+- name: Upgrade all packages
+  ansible.builtin.dnf:
+    name: "*"
+    state: latest # noqa package-latest
+    update_cache: true
+  when: katello_upgrade_packages | bool
+
+- name: Install prerequisite packages
+  ansible.builtin.dnf:
+    name:
+      - chrony
+      - glibc-langpack-en
+      # Needed by the theforeman.foreman API modules.
+      - python3-requests
+    state: present
+
+- name: Keep the clock synchronized
+  ansible.builtin.systemd_service:
+    name: chronyd
+    state: started
+    enabled: true
+
+- name: Install {{ _katello_installer_package[katello_deployment][katello_install_method] }}
+  ansible.builtin.dnf:
+    name: "{{ _katello_installer_package[katello_deployment][katello_install_method] }}"
+    state: present

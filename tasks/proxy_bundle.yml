@@ -1,0 +1,245 @@
+---
+# Runs on the proxy. Everything that touches the Katello server is delegated
+# to katello_proxy_server.
+- name: Set the proxy certificate paths on the Katello server
+  ansible.builtin.set_fact:
+    _katello_proxy_server_dir: "{{ katello_proxy_cert_dir }}/{{ _katello_proxy_fqdn }}"
+    _katello_proxy_server_ca_dir: "{{ hostvars[katello_proxy_server]['katello_ssl_dir'] | default(katello_ssl_dir) }}"
+
+- name: Set the proxy certificate files on the Katello server
+  ansible.builtin.set_fact:
+    _katello_proxy_server_files:
+      cert: "{{ _katello_proxy_server_dir }}/smart-proxy_cert.pem"
+      key: "{{ _katello_proxy_server_dir }}/smart-proxy_cert_key.pem"
+      ca: "{{ _katello_proxy_server_dir }}/ca_cert_bundle.pem"
+      fqdn: "{{ _katello_proxy_fqdn }}"
+
+- name: Create the proxy certificate directory on the Katello server
+  ansible.builtin.file:
+    path: "{{ _katello_proxy_server_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  delegate_to: "{{ katello_proxy_server }}"
+
+- name: Install python3-cryptography on the Katello server
+  ansible.builtin.dnf:
+    name: python3-cryptography
+    state: present
+  delegate_to: "{{ katello_proxy_server }}"
+  when: katello_ssl_mode != 'default'
+
+- name: Write the supplied proxy certificate files on the Katello server
+  when: katello_ssl_mode == 'custom'
+  delegate_to: "{{ katello_proxy_server }}"
+  block:
+    - name: Write the proxy certificate
+      ansible.builtin.copy:
+        content: "{{ katello_ssl_server_cert | trim }}\n"
+        dest: "{{ _katello_proxy_server_files.cert }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: _katello_proxy_cert_written
+
+    - name: Write the proxy private key
+      ansible.builtin.copy:
+        content: "{{ katello_ssl_server_key | trim }}\n"
+        dest: "{{ _katello_proxy_server_files.key }}"
+        owner: root
+        group: root
+        mode: "0600"
+      register: _katello_proxy_key_written
+      no_log: true
+
+    - name: Write the CA bundle
+      ansible.builtin.copy:
+        content: "{{ katello_ssl_ca_bundle | trim }}\n"
+        dest: "{{ _katello_proxy_server_files.ca }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: _katello_proxy_ca_written
+
+- name: Sign a proxy certificate with the role-generated CA on the Katello server
+  when: katello_ssl_mode == 'selfsigned'
+  delegate_to: "{{ katello_proxy_server }}"
+  block:
+    - name: Check the Katello server has a role-generated CA
+      ansible.builtin.stat:
+        path: "{{ _katello_proxy_server_ca_dir }}/ca_key.pem"
+      register: _katello_proxy_ca_key
+
+    - name: Assert the Katello server has a role-generated CA
+      ansible.builtin.assert:
+        that:
+          - _katello_proxy_ca_key.stat.exists
+        fail_msg: >-
+          katello_ssl_mode: selfsigned on a proxy needs the Katello server to be installed
+          with katello_ssl_mode: selfsigned, so its CA key is in
+          {{ _katello_proxy_server_ca_dir }}/ca_key.pem.
+
+    - name: Copy the CA certificate into the proxy directory
+      ansible.builtin.copy:
+        src: "{{ _katello_proxy_server_ca_dir }}/ca_cert_bundle.pem"
+        dest: "{{ _katello_proxy_server_files.ca }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: _katello_proxy_ca_written
+
+    - name: Generate the proxy private key
+      community.crypto.openssl_privatekey:
+        path: "{{ _katello_proxy_server_files.key }}"
+        type: RSA
+        size: "{{ katello_ssl_selfsigned_key_size }}"
+        owner: root
+        group: root
+        mode: "0600"
+      register: _katello_proxy_key_written
+
+    - name: Generate the proxy signing request
+      community.crypto.openssl_csr:
+        path: "{{ _katello_proxy_server_dir }}/smart-proxy_cert_csr.pem"
+        privatekey_path: "{{ _katello_proxy_server_files.key }}"
+        common_name: "{{ _katello_proxy_fqdn }}"
+        subject: "{{ katello_ssl_selfsigned_subject }}"
+        subject_alt_name: "{{ (['DNS:' ~ _katello_proxy_fqdn] + katello_ssl_extra_sans) | unique }}"
+        basic_constraints: ["CA:FALSE"]
+        key_usage: [digitalSignature, keyEncipherment]
+        extended_key_usage: [serverAuth, clientAuth]
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Sign the proxy certificate with the CA
+      community.crypto.x509_certificate:
+        path: "{{ _katello_proxy_server_files.cert }}"
+        csr_path: "{{ _katello_proxy_server_dir }}/smart-proxy_cert_csr.pem"
+        provider: ownca
+        ownca_path: "{{ _katello_proxy_server_ca_dir }}/ca_cert_bundle.pem"
+        ownca_privatekey_path: "{{ _katello_proxy_server_ca_dir }}/ca_key.pem"
+        ownca_not_after: "+{{ katello_ssl_selfsigned_days }}d"
+        owner: root
+        group: root
+        mode: "0644"
+      register: _katello_proxy_cert_written
+
+- name: Check the proxy certificate
+  ansible.builtin.include_tasks:
+    file: ssl_check.yml
+    apply:
+      delegate_to: "{{ katello_proxy_server }}"
+  vars:
+    _katello_ssl_check: "{{ _katello_proxy_server_files }}"
+  when: katello_ssl_mode != 'default'
+
+- name: Decide whether the bundle must be (re)generated
+  ansible.builtin.stat:
+    path: "{{ _katello_proxy_bundle_server_path[katello_install_method] }}"
+  delegate_to: "{{ katello_proxy_server }}"
+  register: _katello_proxy_bundle_stat
+
+- name: Set the bundle generation flags
+  ansible.builtin.set_fact:
+    _katello_proxy_bundle_exists: "{{ _katello_proxy_bundle_stat.stat.exists }}"
+    _katello_proxy_certs_changed: >-
+      {{ (_katello_proxy_cert_written | default({}) is changed)
+         or (_katello_proxy_key_written | default({}) is changed)
+         or (_katello_proxy_ca_written | default({}) is changed) }}
+    _katello_proxy_cert_args: >-
+      {{ [] if katello_ssl_mode == 'default' else
+         (['--server-cert', _katello_proxy_server_files.cert,
+           '--server-key', _katello_proxy_server_files.key,
+           '--server-ca-cert', _katello_proxy_server_files.ca]
+          if katello_install_method == 'installer' else
+          ['--certificate-server-certificate', _katello_proxy_server_files.cert,
+           '--certificate-server-key', _katello_proxy_server_files.key]) }}
+
+- name: Generate the proxy certificate bundle with foreman-proxy-certs-generate
+  ansible.builtin.command:
+    argv: >-
+      {{ ['foreman-proxy-certs-generate',
+          '--foreman-proxy-fqdn', _katello_proxy_fqdn,
+          '--certs-tar', _katello_proxy_bundle_server_path.installer]
+         + _katello_proxy_cert_args
+         + (['--certs-update-server'] if _katello_proxy_bundle_exists else []) }}
+  delegate_to: "{{ katello_proxy_server }}"
+  changed_when: true
+  when:
+    - katello_install_method == 'installer'
+    - not _katello_proxy_bundle_exists or katello_proxy_regenerate_bundle | bool or _katello_proxy_certs_changed | bool
+
+- name: Generate the proxy auth bundle with foremanctl
+  ansible.builtin.command:
+    argv: >-
+      {{ ['foremanctl', 'auth-bundle', _katello_proxy_fqdn]
+         + _katello_proxy_cert_args
+         + (['--certificate-renew'] if _katello_proxy_bundle_exists else []) }}
+  delegate_to: "{{ katello_proxy_server }}"
+  changed_when: true
+  when:
+    - katello_install_method == 'foremanctl'
+    - not _katello_proxy_bundle_exists or katello_proxy_regenerate_bundle | bool or _katello_proxy_certs_changed | bool
+
+# The bundle goes from the server to the proxy through Ansible's memory
+# (base64), so it is never written on the controller.
+- name: Read the bundle from the Katello server
+  ansible.builtin.slurp:
+    src: "{{ _katello_proxy_bundle_server_path[katello_install_method] }}"
+  delegate_to: "{{ katello_proxy_server }}"
+  register: _katello_proxy_bundle
+  no_log: true
+
+- name: Create the state directory
+  ansible.builtin.file:
+    path: "{{ _katello_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Write the bundle to the proxy (base64)
+  ansible.builtin.copy:
+    content: "{{ _katello_proxy_bundle.content }}"
+    dest: "{{ _katello_proxy_bundle_path }}.b64"
+    owner: root
+    group: root
+    mode: "0600"
+  register: _katello_proxy_bundle_b64
+  no_log: true
+
+- name: Check for the decoded bundle on the proxy
+  ansible.builtin.stat:
+    path: "{{ _katello_proxy_bundle_path }}"
+  register: _katello_proxy_bundle_local
+
+- name: Decode the bundle on the proxy
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      umask 077 &&
+      base64 -d {{ (_katello_proxy_bundle_path ~ '.b64') | quote }} > {{ _katello_proxy_bundle_path | quote }}
+  changed_when: true
+  when: _katello_proxy_bundle_b64 is changed or not _katello_proxy_bundle_local.stat.exists
+
+- name: Record the bundle checksum for the install fingerprint
+  ansible.builtin.set_fact:
+    _katello_proxy_bundle_checksum: "{{ _katello_proxy_bundle.content | hash('sha256') }}"
+
+- name: Read the OAuth credentials from the Katello server's installer answers
+  ansible.builtin.slurp:
+    src: /etc/foreman-installer/scenarios.d/katello-answers.yaml
+  delegate_to: "{{ katello_proxy_server }}"
+  register: _katello_proxy_answers
+  no_log: true
+  when: katello_install_method == 'installer'
+
+- name: Extract the OAuth credentials
+  ansible.builtin.set_fact:
+    _katello_proxy_oauth_key: "{{ (_katello_proxy_answers.content | b64decode | from_yaml).foreman.oauth_consumer_key }}"
+    _katello_proxy_oauth_secret: "{{ (_katello_proxy_answers.content | b64decode | from_yaml).foreman.oauth_consumer_secret }}"
+  no_log: true
+  when: katello_install_method == 'installer'

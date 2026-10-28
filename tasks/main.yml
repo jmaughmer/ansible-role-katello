@@ -1,0 +1,91 @@
+---
+- name: Validate role input and platform
+  ansible.builtin.import_tasks: assert.yml
+
+- name: Select the tuning profile
+  ansible.builtin.import_tasks: tuning.yml
+
+- name: Set the hostname
+  ansible.builtin.import_tasks: hostname.yml
+  when: katello_set_hostname | bool
+
+- name: Run pre-flight checks
+  ansible.builtin.import_tasks: preflight.yml
+  when: katello_preflight_checks | bool
+
+- name: Configure repositories
+  ansible.builtin.import_tasks: repositories.yml
+
+- name: Install packages
+  ansible.builtin.import_tasks: packages.yml
+
+- name: Configure the firewall
+  ansible.builtin.import_tasks: firewall.yml
+  when: katello_manage_firewall | bool
+
+- name: Apply OS tuning and the recommended installer settings
+  ansible.builtin.import_tasks: tuning_apply.yml
+
+- name: Set up the server SSL certificate
+  ansible.builtin.import_tasks: ssl.yml
+  when:
+    - katello_deployment == 'server'
+    - katello_ssl_mode != 'default'
+
+- name: Create the smart proxy certificate bundle on the Katello server
+  ansible.builtin.import_tasks: proxy_bundle.yml
+  when:
+    - katello_deployment == 'proxy'
+    - katello_run_installer | bool
+
+- name: Install Katello
+  ansible.builtin.import_tasks: install.yml
+  when: katello_run_installer | bool
+
+- name: Verify the installation
+  ansible.builtin.import_tasks: verify.yml
+  when:
+    - katello_deployment == 'server'
+    - katello_run_installer | bool
+    - katello_verify | bool
+
+- name: Register the smart proxy
+  ansible.builtin.import_tasks: proxy_register.yml
+  when:
+    - katello_deployment == 'proxy'
+    - katello_run_installer | bool
+
+- name: Configure organizations and locations
+  ansible.builtin.import_tasks: organizations.yml
+  when:
+    - katello_deployment == 'server'
+    - katello_run_installer | bool
+    - (katello_organizations | length > 0) or (katello_locations | length > 0)
+
+- name: Configure LDAP / Active Directory authentication
+  ansible.builtin.import_tasks: ldap.yml
+  when:
+    - katello_deployment == 'server'
+    - katello_run_installer | bool
+    - katello_ldap_auth_sources | length > 0
+
+- name: Configure internal users and user groups
+  ansible.builtin.import_tasks: users.yml
+  when:
+    - katello_deployment == 'server'
+    - katello_run_installer | bool
+    - (katello_users | length > 0) or (katello_usergroups | length > 0)
+
+- name: Upload subscription manifests and enable Red Hat repositories
+  ansible.builtin.import_tasks: redhat.yml
+  when:
+    - katello_deployment == 'server'
+    - katello_run_installer | bool
+    - (katello_subscription_manifests | length > 0) or (katello_redhat_repositories | length > 0)
+
+- name: Configure content credentials, products and repositories
+  ansible.builtin.import_tasks: content.yml
+  when:
+    - katello_deployment == 'server'
+    - katello_run_installer | bool
+    - (katello_content_credentials | length > 0) or (katello_products | length > 0)

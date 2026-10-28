@@ -1,0 +1,21 @@
+---
+# Shared settings (admin credentials, initial organization and location)
+# belong in group_vars/all so the server and the proxies agree on them.
+- name: Install Foreman with Katello 5.0
+  hosts: katello
+  become: true
+  vars:
+    # Keep the password in Ansible Vault, for example group_vars/all/vault.yml
+    katello_admin_password: "{{ vault_katello_admin_password }}"
+  roles:
+    - role: ansible-role-katello
+
+- name: Install Katello smart proxies
+  hosts: katello_proxies
+  become: true
+  vars:
+    katello_admin_password: "{{ vault_katello_admin_password }}"
+    katello_deployment: proxy
+    katello_proxy_server: "{{ groups['katello'] | first }}"
+  roles:
+    - role: ansible-role-katello

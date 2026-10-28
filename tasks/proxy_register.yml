@@ -1,0 +1,44 @@
+---
+- name: Register the smart proxy and assign organizations and locations
+  theforeman.foreman.smart_proxy:
+    server_url: "https://{{ katello_proxy_server_fqdn }}"
+    username: "{{ katello_admin_username }}"
+    password: "{{ katello_admin_password }}"
+    validate_certs: "{{ katello_verify_validate_certs | bool }}"
+    name: "{{ _katello_proxy_fqdn }}"
+    url: "https://{{ _katello_proxy_fqdn }}:{{ _katello_proxy_port[katello_install_method] }}"
+    organizations: "{{ katello_proxy_organizations }}"
+    locations: "{{ katello_proxy_locations }}"
+    state: present
+
+- name: Verify the Katello server can reach the smart proxy
+  when: katello_verify | bool
+  block:
+    - name: Look up the smart proxy
+      ansible.builtin.uri:
+        url: "https://{{ katello_proxy_server_fqdn }}/api/v2/smart_proxies?search=name%3D%22{{ _katello_proxy_fqdn | urlencode }}%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ katello_verify_validate_certs | bool }}"
+      register: _katello_proxy_lookup
+      no_log: true
+
+    - name: Refresh the smart proxy features
+      ansible.builtin.uri:
+        url: "https://{{ katello_proxy_server_fqdn }}/api/v2/smart_proxies/{{ _katello_proxy_lookup.json.results[0].id }}/refresh"
+        method: PUT
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ katello_verify_validate_certs | bool }}"
+      register: _katello_proxy_refresh
+      changed_when: false
+      until: _katello_proxy_refresh.status == 200
+      retries: "{{ katello_verify_retries }}"
+      delay: "{{ katello_verify_delay }}"
+      no_log: true
+
+    - name: Show the smart proxy features
+      ansible.builtin.debug:
+        msg: "{{ _katello_proxy_refresh.json.features | default([]) | map(attribute='name') | list }}"

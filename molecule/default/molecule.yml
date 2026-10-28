@@ -1,0 +1,81 @@
+---
+# Fast scenario: prepares two AlmaLinux 9 systemd containers, a Katello
+# server (with a role-generated self-signed certificate) and a smart proxy,
+# without running the installer, which needs a full VM with 20 GB RAM. Use
+# the "full" and "proxy" scenarios for real installs.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/../../requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - name: katello-alma9
+    image: ${MOLECULE_IMAGE:-docker.io/almalinux/9-init}
+    pre_build_image: true
+    hostname: katello.example.test
+    command: /usr/sbin/init
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+  - name: katello-proxy-alma9
+    image: ${MOLECULE_IMAGE:-docker.io/almalinux/9-init}
+    pre_build_image: true
+    hostname: proxy.example.test
+    command: /usr/sbin/init
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        katello_run_installer: false
+        # A container cannot meet the RAM/SELinux/DNS requirements.
+        katello_preflight_enforce: false
+        # firewalld does not run reliably inside a container.
+        katello_manage_firewall: false
+        katello_upgrade_packages: false
+    host_vars:
+      katello-alma9:
+        katello_hostname: katello.example.test
+        katello_ssl_mode: selfsigned
+        katello_ssl_selfsigned_key_size: 2048
+        katello_ssl_extra_sans:
+          - DNS:katello-alias.example.test
+        katello_foreman_plugins: [remote_execution, ansible]
+        katello_tuning: medium
+        katello_custom_hiera:
+          apache::mod::proxy::proxy_timeout: 600
+      katello-proxy-alma9:
+        katello_hostname: proxy.example.test
+        katello_deployment: proxy
+        katello_proxy_server: katello-alma9
+        katello_foreman_proxy_plugins: [remote_execution_script]
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - cleanup
+    - destroy

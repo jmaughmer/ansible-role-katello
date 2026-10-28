@@ -1,0 +1,14 @@
+---
+- name: Install the Katello server
+  hosts: katello-server
+  tasks:
+    - name: Include the katello role
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+
+- name: Install the smart proxy
+  hosts: katello-proxy
+  tasks:
+    - name: Include the katello role
+      ansible.builtin.include_role:
+        name: ansible-role-katello

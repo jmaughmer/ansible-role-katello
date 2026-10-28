@@ -1,0 +1,12 @@
+---
+- name: Set the system hostname
+  ansible.builtin.hostname:
+    name: "{{ katello_hostname }}"
+    use: systemd
+  register: _katello_hostname_result
+
+- name: Refresh facts after the hostname change
+  ansible.builtin.setup:
+    gather_subset:
+      - min
+  when: _katello_hostname_result is changed # noqa: no-handler

@@ -1,0 +1,17 @@
+---
+- name: Wait for the Katello API to report healthy
+  ansible.builtin.uri:
+    url: "https://{{ katello_hostname }}/api/v2/ping"
+    validate_certs: "{{ katello_verify_validate_certs | bool }}"
+    return_content: true
+  register: _katello_ping
+  until:
+    - _katello_ping.status == 200
+    - (_katello_ping.json.results.katello.status | default('')) == 'ok'
+  retries: "{{ katello_verify_retries }}"
+  delay: "{{ katello_verify_delay }}"
+
+- name: Show the service status
+  ansible.builtin.debug:
+    var: _katello_ping.json.results.katello.services
+    verbosity: 1

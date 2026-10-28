@@ -1,0 +1,61 @@
+---
+# Full scenario: runs the real install on an existing RHEL 9 or AlmaLinux 9
+# VM (20 GB RAM, 4 cores, 4 GB swap, resolvable FQDN). Molecule does not
+# create or destroy the VM. Point it at the VM with environment variables:
+#
+#   export KATELLO_TEST_HOST=katello.example.com
+#   export KATELLO_TEST_USER=root
+#   export KATELLO_TEST_ADMIN_PASSWORD='changeme123'
+#   export KATELLO_TEST_METHOD=installer   # or foremanctl
+#   molecule test -s full
+#
+# Optional Red Hat content test (RHEL VM with CDN access): point
+# KATELLO_TEST_MANIFEST at a manifest zip on the controller. The scenario
+# uploads it to Molecule Org and enables KATELLO_TEST_RH_REPO_LABEL (default
+# rhel-9-for-x86_64-baseos-rpms, releasever 9) without syncing it.
+#
+# Use a throwaway VM: the install cannot be undone.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/../../requirements.yml
+
+driver:
+  name: default
+  options:
+    managed: false
+    login_cmd_template: "ssh {address} -l {user}"
+    ansible_connection_options:
+      ansible_connection: ssh
+
+platforms:
+  - name: katello-full
+
+provisioner:
+  name: ansible
+  inventory:
+    hosts:
+      all:
+        hosts:
+          katello-full:
+            ansible_host: ${KATELLO_TEST_HOST}
+            ansible_user: ${KATELLO_TEST_USER:-root}
+            ansible_become: true
+    group_vars:
+      all:
+        katello_install_method: ${KATELLO_TEST_METHOD:-installer}
+        katello_admin_username: admin
+        katello_admin_password: ${KATELLO_TEST_ADMIN_PASSWORD}
+        katello_initial_organization: Molecule Org
+        katello_initial_location: Molecule Location
+
+verifier:
+  name: ansible
+
+scenario:
+  test_sequence:
+    - dependency
+    - syntax
+    - converge
+    - idempotence
+    - verify

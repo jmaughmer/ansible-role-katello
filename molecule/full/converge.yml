@@ -1,0 +1,82 @@
+---
+- name: Converge
+  hosts: all
+  vars:
+    # Optional LDAP / AD test. Set KATELLO_TEST_LDAP_HOST (and the other
+    # KATELLO_TEST_LDAP_* variables) to configure and test an auth source.
+    _katello_test_ldap_host: "{{ lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_HOST') }}"
+    # Optional Red Hat content test. Set KATELLO_TEST_MANIFEST to a manifest
+    # zip on the controller to upload it and enable a Red Hat repository.
+    _katello_test_manifest: "{{ lookup('ansible.builtin.env', 'KATELLO_TEST_MANIFEST') }}"
+  tasks:
+    - name: Include the katello role
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+      vars:
+        katello_tuning: auto
+        katello_organizations:
+          - name: Molecule Extra Org
+            label: molecule_extra_org
+            description: Created by the Molecule full scenario
+        katello_locations:
+          - name: Molecule Datacenter
+            organizations: [Molecule Org, Molecule Extra Org]
+          - name: Molecule Rack
+            parent: Molecule Datacenter
+            organizations: [Molecule Org]
+        katello_users:
+          - login: molecule.user
+            password: Molecule-Pass-123
+            firstname: Molecule
+            lastname: User
+            mail: molecule.user@example.com
+            roles: [Viewer]
+            organizations: [Molecule Org, Molecule Extra Org]
+            locations: [Molecule Location]
+            default_organization: Molecule Extra Org
+          - login: molecule.admin
+            password: Molecule-Pass-456
+            admin: true
+        katello_usergroups:
+          - name: Molecule Helpdesk
+            users: [molecule.user]
+            roles: [Viewer]
+          - name: Molecule Operators
+            usergroups: [Molecule Helpdesk]
+            roles: [Manager]
+        katello_content_credentials:
+          - name: RPM-GPG-KEY-AlmaLinux-9
+            url: https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-9
+        katello_products:
+          - name: Molecule AlmaLinux 9
+            gpg_key: RPM-GPG-KEY-AlmaLinux-9
+            repositories:
+              - name: AlmaLinux 9 BaseOS x86_64
+                url: https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/
+                download_policy: on_demand
+                os_versions: [rhel-9]
+        katello_subscription_manifests: >-
+          {{ [] if _katello_test_manifest | length == 0 else [{
+               'organization': 'Molecule Org',
+               'file': _katello_test_manifest}] }}
+        katello_redhat_repositories: >-
+          {{ [] if _katello_test_manifest | length == 0 else [{
+               'organization': 'Molecule Org',
+               'label': lookup('ansible.builtin.env', 'KATELLO_TEST_RH_REPO_LABEL', default='rhel-9-for-x86_64-baseos-rpms'),
+               'repositories': [{'releasever': '9'}]}] }}
+        katello_ldap_auth_sources: >-
+          {{ [] if _katello_test_ldap_host | length == 0 else [{
+               'name': 'Molecule LDAP',
+               'server_type': lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_TYPE', default='active_directory'),
+               'host': _katello_test_ldap_host,
+               'port': lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_PORT', default='636') | int,
+               'tls': lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_TLS', default='true') | bool,
+               'account': lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_ACCOUNT'),
+               'account_password': lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_PASSWORD'),
+               'base_dn': lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_BASE_DN'),
+               'organizations': 'all',
+               'locations': ['Molecule Location', 'Molecule Datacenter/Molecule Rack'],
+               'group_mappings': [{
+                 'usergroup': 'Molecule LDAP Admins',
+                 'external_group': lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_ADMIN_GROUP', default='katello-admins'),
+                 'admin': true}]}] }}
