@@ -1,0 +1,130 @@
+---
+- name: Install python3-cryptography for the certificate modules
+  ansible.builtin.dnf:
+    name: python3-cryptography
+    state: present
+
+- name: Create the certificate directory
+  ansible.builtin.file:
+    path: "{{ katello_ssl_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Write the supplied certificate files
+  when: katello_ssl_mode == 'custom'
+  block:
+    - name: Write the server certificate
+      ansible.builtin.copy:
+        content: "{{ katello_ssl_server_cert | trim }}\n"
+        dest: "{{ _katello_ssl_files.cert }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Write the server private key
+      ansible.builtin.copy:
+        content: "{{ katello_ssl_server_key | trim }}\n"
+        dest: "{{ _katello_ssl_files.key }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Write the CA bundle
+      ansible.builtin.copy:
+        content: "{{ katello_ssl_ca_bundle | trim }}\n"
+        dest: "{{ _katello_ssl_files.ca }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Generate a self-signed CA and server certificate
+  when: katello_ssl_mode == 'selfsigned'
+  block:
+    - name: Generate the CA private key
+      community.crypto.openssl_privatekey:
+        path: "{{ katello_ssl_dir }}/ca_key.pem"
+        type: RSA
+        size: "{{ katello_ssl_selfsigned_key_size }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Generate the CA signing request
+      community.crypto.openssl_csr:
+        path: "{{ katello_ssl_dir }}/ca_csr.pem"
+        privatekey_path: "{{ katello_ssl_dir }}/ca_key.pem"
+        common_name: "{{ katello_ssl_selfsigned_ca_common_name }}"
+        subject: "{{ katello_ssl_selfsigned_subject }}"
+        basic_constraints: ["CA:TRUE"]
+        basic_constraints_critical: true
+        key_usage: [keyCertSign, cRLSign]
+        key_usage_critical: true
+        use_common_name_for_san: false
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Self-sign the CA certificate
+      community.crypto.x509_certificate:
+        path: "{{ _katello_ssl_files.ca }}"
+        csr_path: "{{ katello_ssl_dir }}/ca_csr.pem"
+        privatekey_path: "{{ katello_ssl_dir }}/ca_key.pem"
+        provider: selfsigned
+        selfsigned_not_after: "+{{ katello_ssl_selfsigned_ca_days }}d"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Generate the server private key
+      community.crypto.openssl_privatekey:
+        path: "{{ _katello_ssl_files.key }}"
+        type: RSA
+        size: "{{ katello_ssl_selfsigned_key_size }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Generate the server signing request
+      community.crypto.openssl_csr:
+        path: "{{ katello_ssl_dir }}/foreman_cert_csr.pem"
+        privatekey_path: "{{ _katello_ssl_files.key }}"
+        common_name: "{{ katello_hostname }}"
+        subject: "{{ katello_ssl_selfsigned_subject }}"
+        subject_alt_name: "{{ (['DNS:' ~ katello_hostname] + katello_ssl_extra_sans) | unique }}"
+        basic_constraints: ["CA:FALSE"]
+        key_usage: [digitalSignature, keyEncipherment]
+        extended_key_usage: [serverAuth, clientAuth]
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Sign the server certificate with the CA
+      community.crypto.x509_certificate:
+        path: "{{ _katello_ssl_files.cert }}"
+        csr_path: "{{ katello_ssl_dir }}/foreman_cert_csr.pem"
+        provider: ownca
+        ownca_path: "{{ _katello_ssl_files.ca }}"
+        ownca_privatekey_path: "{{ katello_ssl_dir }}/ca_key.pem"
+        ownca_not_after: "+{{ katello_ssl_selfsigned_days }}d"
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Check the server certificate
+  ansible.builtin.include_tasks: ssl_check.yml
+  vars:
+    _katello_ssl_check: "{{ _katello_ssl_files | combine({'fqdn': katello_hostname}) }}"
+
+- name: Checksum the certificate files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop: "{{ [_katello_ssl_files.cert, _katello_ssl_files.key, _katello_ssl_files.ca] }}"
+  register: _katello_ssl_stat
+
+- name: Record the certificate checksums for the install fingerprint
+  ansible.builtin.set_fact:
+    _katello_ssl_checksums: "{{ _katello_ssl_stat.results | map(attribute='stat.checksum') | list }}"

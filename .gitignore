@@ -1,0 +1,6 @@
+inventory.yml
+*.retry
+.cache/
+__pycache__/
+.venv/
+.ansible/

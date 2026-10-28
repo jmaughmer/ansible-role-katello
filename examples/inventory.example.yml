@@ -1,0 +1,14 @@
+---
+# Copy to inventory.yml and adjust.
+all:
+  vars:
+    ansible_user: root
+    katello_initial_organization: "My Organization"
+    katello_initial_location: "My Location"
+  children:
+    katello:
+      hosts:
+        katello.example.com:
+    katello_proxies:
+      hosts:
+        proxy01.example.com:

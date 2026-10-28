@@ -1,0 +1,90 @@
+---
+- name: Apply OS tuning
+  when: katello_os_tuning | bool
+  block:
+    - name: Install tuned
+      ansible.builtin.dnf:
+        name: tuned
+        state: present
+
+    - name: Create the katello tuned profile directory
+      ansible.builtin.file:
+        path: /etc/tuned/katello
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # From "Tuning performance": PostgreSQL and Redis perform poorly with
+    # Transparent Huge Pages, so the profile turns them off.
+    - name: Write the katello tuned profile
+      ansible.builtin.copy:
+        dest: /etc/tuned/katello/tuned.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (katello role).
+          [main]
+          summary=Foreman/Katello: {{ katello_tuned_parent_profile }} with Transparent Huge Pages disabled
+          include={{ katello_tuned_parent_profile }}
+
+          [vm]
+          transparent_hugepages=never
+
+    # tuned cannot change kernel settings from inside a container.
+    - name: Activate the katello tuned profile
+      when: ansible_facts['virtualization_type'] | default('') not in ['docker', 'podman', 'container', 'containerd']
+      block:
+        - name: Start tuned
+          ansible.builtin.systemd_service:
+            name: tuned
+            state: started
+            enabled: true
+
+        - name: Read the active tuned profile
+          ansible.builtin.command:
+            argv: [tuned-adm, active]
+          register: _katello_tuned_active
+          changed_when: false
+
+        - name: Select the katello tuned profile
+          ansible.builtin.command:
+            argv: [tuned-adm, profile, katello]
+          changed_when: true
+          when: _katello_tuned_active.stdout is not search('Current active profile:\s*katello\s*$', multiline=true)
+
+- name: Write the recommended settings to custom-hiera.yaml
+  when:
+    - katello_deployment == 'server'
+    - katello_install_method == 'installer'
+  block:
+    - name: Build the custom Hiera settings
+      ansible.builtin.set_fact:
+        _katello_custom_hiera_settings: >-
+          {{ ({'postgresql::server::config_entries': katello_tuning_postgresql_settings}
+              if (katello_tuning_postgresql | bool
+                  and _katello_tuning_profile | default('', true) in _katello_tuning_profile_order[1:])
+              else {})
+             | combine(katello_custom_hiera, recursive=true) }}
+
+    - name: Manage the role's block in custom-hiera.yaml
+      ansible.builtin.blockinfile:
+        path: "{{ _katello_custom_hiera_file }}"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (katello role)"
+        block: "{{ _katello_custom_hiera_settings | to_nice_yaml(indent=2) if _katello_custom_hiera_settings else '' }}"
+        state: "{{ 'present' if _katello_custom_hiera_settings else 'absent' }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Checksum custom-hiera.yaml for the install fingerprint
+      ansible.builtin.stat:
+        path: "{{ _katello_custom_hiera_file }}"
+        checksum_algorithm: sha256
+      register: _katello_custom_hiera_stat
+
+    - name: Record the custom-hiera.yaml checksum
+      ansible.builtin.set_fact:
+        _katello_custom_hiera_checksum: "{{ _katello_custom_hiera_stat.stat.checksum | default('') }}"

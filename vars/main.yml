@@ -1,0 +1,114 @@
+---
+_katello_supported_distributions:
+  - RedHat
+  - AlmaLinux
+_katello_supported_methods:
+  - installer
+  - foremanctl
+
+_katello_supported_deployments:
+  - server
+  - proxy
+_katello_ssl_modes:
+  - default
+  - custom
+  - selfsigned
+
+_katello_installer_package:
+  server:
+    installer: foreman-installer-katello
+    foremanctl: foremanctl
+  proxy:
+    installer: foreman-proxy-content
+    foremanctl: foremanctl
+
+# Certificate file names used by the upstream guides.
+_katello_ssl_files:
+  cert: "{{ katello_ssl_dir }}/foreman_cert.pem"
+  key: "{{ katello_ssl_dir }}/foreman_cert_key.pem"
+  ca: "{{ katello_ssl_dir }}/ca_cert_bundle.pem"
+
+# Smart proxy certificate bundle, created on the Katello server and copied to
+# the proxy.
+_katello_proxy_fqdn: "{{ katello_hostname }}"
+_katello_proxy_bundle_name:
+  installer: "{{ _katello_proxy_fqdn }}-certs.tar"
+  foremanctl: "{{ _katello_proxy_fqdn }}.tar.gz"
+_katello_proxy_bundle_server_path:
+  installer: "{{ katello_proxy_cert_dir }}/{{ _katello_proxy_fqdn }}/{{ _katello_proxy_fqdn }}-certs.tar"
+  foremanctl: "/var/lib/foremanctl/certs/bundles/{{ _katello_proxy_fqdn }}.tar.gz"
+_katello_proxy_bundle_path: "{{ _katello_state_dir }}/{{ _katello_proxy_bundle_name[katello_install_method] }}"
+_katello_proxy_port:
+  installer: 9090
+  foremanctl: 8443
+
+# Ports from the "Configuring the firewall" section of the install guides.
+_katello_firewall:
+  installer:
+    ports:
+      - 8000/tcp
+      - 9090/tcp
+    services:
+      - http
+      - https
+  foremanctl:
+    ports:
+      - 8000/tcp
+      - 8443/tcp
+    services:
+      - http
+      - https
+
+# Records the arguments of the last successful install so reruns are skipped.
+_katello_state_dir: /var/lib/ansible-katello
+_katello_state_file: "{{ _katello_state_dir }}/install.sha256"
+
+# LDAP auth source defaults. Values given in katello_ldap_auth_sources win.
+_katello_ldap_server_types:
+  - active_directory
+  - free_ipa
+  - posix
+_katello_ldap_common_defaults:
+  port: 636
+  tls: true
+  onthefly_register: true
+  usergroup_sync: true
+  organizations: ["{{ katello_initial_organization }}"]
+  locations: ["{{ katello_initial_location }}"]
+  group_mappings: []
+  state: present
+_katello_ldap_attribute_keys: [login, firstname, lastname, mail, photo]
+_katello_ldap_type_defaults:
+  active_directory:
+    attr_login: sAMAccountName
+    attr_firstname: givenName
+    attr_lastname: sn
+    attr_mail: mail
+  free_ipa:
+    attr_login: uid
+    attr_firstname: givenName
+    attr_lastname: sn
+    attr_mail: mail
+  posix:
+    attr_login: uid
+    attr_firstname: givenName
+    attr_lastname: sn
+    attr_mail: mail
+
+_katello_states: [present, absent]
+_katello_content_credential_types: [gpg_key, cert]
+_katello_manifest_states: [present, refreshed, absent]
+_katello_repository_set_states: [enabled, disabled]
+_katello_manifest_dir: "{{ _katello_state_dir }}/manifests"
+_katello_repository_content_types: [deb, docker, file, ostree, yum, ansible_collection, python]
+
+# Predefined tuning profiles from "Tuning Foreman server performance with
+# predefined profiles": maximum hosts, minimum RAM (GB) and CPU cores.
+_katello_tuning_profiles:
+  default: {hosts: 5000, ram_gb: 20, cpus: 4}
+  medium: {hosts: 10000, ram_gb: 32, cpus: 8}
+  large: {hosts: 20000, ram_gb: 64, cpus: 16}
+  extra-large: {hosts: 60000, ram_gb: 128, cpus: 32}
+  extra-extra-large: {hosts: 999999999, ram_gb: 256, cpus: 48}
+_katello_tuning_profile_order: [default, medium, large, extra-large, extra-extra-large]
+_katello_custom_hiera_file: /etc/foreman-installer/custom-hiera.yaml

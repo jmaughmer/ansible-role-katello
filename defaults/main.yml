@@ -1,0 +1,363 @@
+---
+# Katello / Foreman release to install. Katello 5.0 ships with Foreman 5.0.
+katello_version: "5.0"
+katello_foreman_version: "5.0"
+
+# What to install:
+#   server - Foreman with Katello
+#   proxy  - a Smart Proxy with content (foreman-proxy-content). Its
+#            certificate bundle is created on katello_proxy_server.
+katello_deployment: server
+
+# How to install:
+#   installer  - RPM-based install with foreman-installer --scenario katello
+#   foremanctl - containerized install (Podman quadlets) managed by foremanctl
+katello_install_method: installer
+
+# Initial objects. The organization label is generated once and cannot be
+# changed later, so choose the name carefully.
+katello_initial_organization: "Default Organization"
+katello_initial_location: "Default Location"
+katello_admin_username: admin
+# Required when katello_run_installer is true. Store it in Ansible Vault.
+katello_admin_password: ""
+
+# FQDN the server is reached on. Must be lowercase and resolve forward and back.
+katello_hostname: "{{ ansible_facts['fqdn'] }}"
+# Set the system hostname to katello_hostname before installing.
+katello_set_hostname: false
+
+# Pre-flight checks against the documented requirements. When
+# katello_preflight_enforce is false, failed checks only print warnings.
+katello_preflight_checks: true
+katello_preflight_enforce: true
+# The server minimums follow the selected tuning profile (default: 20 GB, 4 cores).
+katello_min_memory_mb: >-
+  {{ (_katello_tuning_profiles[_katello_tuning_profile | default('default', true)].ram_gb * 1024 * 0.95) | int
+     if katello_deployment == 'server' else 11776 }}
+katello_min_swap_mb: 3900
+katello_min_cpus: >-
+  {{ _katello_tuning_profiles[_katello_tuning_profile | default('default', true)].cpus
+     if katello_deployment == 'server' else 4 }}
+
+# Repositories. Override the URLs to point at an internal mirror.
+katello_foreman_release_rpm: "https://yum.theforeman.org/releases/{{ katello_foreman_version }}/el9/x86_64/foreman-release.rpm"
+katello_repos_rpm: "https://yum.theforeman.org/katello/{{ katello_version }}/katello/el9/x86_64/katello-repos-latest.rpm"
+# Puppet (OpenVox) is only needed for the RPM-based installer.
+katello_openvox_release_rpm: "https://yum.voxpupuli.org/openvox8-release-el-9.noarch.rpm"
+
+# On RHEL, enable the BaseOS and AppStream repositories with subscription-manager.
+# Turn this off if the host gets its content from somewhere else.
+katello_manage_rhel_repos: true
+katello_rhel_repos:
+  - rhel-9-for-x86_64-baseos-rpms
+  - rhel-9-for-x86_64-appstream-rpms
+
+# Run "dnf upgrade" before installing, as the documentation asks.
+katello_upgrade_packages: true
+
+# Firewall
+katello_manage_firewall: true
+# Extra firewalld services/ports, for example dns, dhcp, tftp, puppetmaster
+# or mqtt (pull-based remote execution).
+katello_firewall_extra_services: []
+katello_firewall_extra_ports: []
+
+# Run the installer. Set to false to only prepare the host (used by Molecule).
+katello_run_installer: true
+# Re-run the installer even if the same arguments were already applied.
+katello_force_install: false
+# Seconds the installer may run before Ansible gives up.
+katello_install_timeout: 7200
+# Tuning (server only; smart proxies cannot use tuning profiles).
+#   ""                  - let the installer decide (its "default" profile)
+#   default, medium, large, extra-large, extra-extra-large - that profile
+#   auto                - pick the profile for katello_managed_hosts, or, if
+#                         that is 0, the largest profile the hardware supports
+# Profile minimums (hosts / RAM / cores): default 5000/20G/4,
+# medium 10000/32G/8, large 20000/64G/16, extra-large 60000/128G/32,
+# extra-extra-large 60000+/256G/48. The pre-flight checks use them.
+katello_tuning: ""
+katello_managed_hosts: 0
+
+# Recommended settings from "Tuning performance" (installer method only).
+# Set a value to 0 or false to leave the installer default.
+# Puma threads per worker (the guide recommends 16 for every profile).
+katello_tuning_puma_threads: 16
+# Puma workers. 0 keeps the installer's auto-tuning, min(CPUs * 1.5, RAM GB - 1.5).
+katello_tuning_puma_workers: 0
+# Dynflow (Sidekiq) worker instances (the guide recommends 3).
+katello_tuning_dynflow_workers: 3
+# PostgreSQL settings from the guide, applied for medium and larger profiles.
+katello_tuning_postgresql: true
+katello_tuning_postgresql_settings:
+  max_connections: 1000
+  shared_buffers: 2GB
+  work_mem: 8MB
+  autovacuum_vacuum_cost_limit: 2000
+# Extra Hiera settings written to a managed block in
+# /etc/foreman-installer/custom-hiera.yaml, for example
+#   apache::mod::proxy::proxy_timeout: 600
+# Settings there override the tuning profile, so add only what you need.
+katello_custom_hiera: {}
+
+# OS tuning: a tuned profile based on katello_tuned_parent_profile that also
+# disables Transparent Huge Pages, which PostgreSQL and Redis dislike.
+# Applies to servers and proxies. Skipped inside containers.
+katello_os_tuning: true
+katello_tuned_parent_profile: throughput-performance
+# Extra arguments passed as-is to foreman-installer, for example
+#   - --enable-foreman-plugin-remote-execution
+katello_installer_extra_args: []
+# foremanctl only: features to add (see "foremanctl features"), extra
+# hostnames the server answers on, and extra arguments.
+katello_foremanctl_features: []
+katello_foremanctl_server_aliases: []
+katello_foremanctl_extra_args: []
+
+# Plugins, enabled with foreman-installer --enable-foreman-plugin-<name>,
+# --enable-foreman-proxy-plugin-<name> and --enable-foreman-cli-<name>.
+# Underscores and hyphens are both accepted. Plugin options go in
+# katello_installer_extra_args. For foremanctl, use katello_foremanctl_features
+# (list them with "foremanctl features").
+#
+# katello_foreman_plugins: [remote_execution, ansible, openscap, templates]
+# katello_foreman_proxy_plugins: [remote_execution_script, ansible, openscap]
+# katello_foreman_cli_plugins: [remote_execution, ansible, openscap]
+katello_foreman_plugins: []
+katello_foreman_proxy_plugins: []
+katello_foreman_cli_plugins: []
+
+# SSL certificate for the web UI, API and content:
+#   default    - the installer's own self-signed CA
+#   custom     - your certificate, key and CA bundle (PEM text below)
+#   selfsigned - the role creates its own CA in katello_ssl_dir and signs a
+#                server certificate with it. Smart proxies with
+#                katello_ssl_mode: selfsigned get certificates from the same CA.
+# On a proxy, the certificate settings describe the proxy's certificate.
+katello_ssl_mode: default
+katello_ssl_dir: /root/foreman_cert
+# custom mode. Use lookup('file', ...) or Ansible Vault. For an intermediate CA,
+# the bundle holds the root first, then the intermediates.
+katello_ssl_server_cert: ""
+katello_ssl_server_key: ""
+katello_ssl_ca_bundle: ""
+# Extra subject alternative names for selfsigned certificates, such as
+#   - DNS:katello.example.com
+#   - IP:192.0.2.10
+katello_ssl_extra_sans: []
+katello_ssl_selfsigned_key_size: 4096
+katello_ssl_selfsigned_days: 825
+katello_ssl_selfsigned_ca_days: 3650
+katello_ssl_selfsigned_ca_common_name: "Katello CA {{ katello_hostname }}"
+katello_ssl_selfsigned_subject:
+  O: "{{ katello_initial_organization }}"
+
+# Smart proxy (katello_deployment: proxy) settings. katello_proxy_server is
+# the inventory name of the Katello server; the bundle is generated there with
+# delegate_to. The proxy also needs the server's katello_admin_username and
+# katello_admin_password to register itself.
+katello_proxy_server: ""
+katello_proxy_server_fqdn: "{{ katello_proxy_server }}"
+# Directory on the Katello server for proxy certificates and bundles.
+katello_proxy_cert_dir: /root/smart-proxy_cert
+katello_proxy_organizations: ["{{ katello_initial_organization }}"]
+katello_proxy_locations: ["{{ katello_initial_location }}"]
+# Regenerate the proxy's certificate bundle even if one exists.
+katello_proxy_regenerate_bundle: false
+
+# Check /api/v2/ping after installing.
+katello_verify: true
+katello_verify_validate_certs: false
+katello_verify_retries: 30
+katello_verify_delay: 10
+
+# LDAP / Active Directory authentication sources, configured through the
+# Foreman API after the install. Each entry needs name, server_type
+# (active_directory, free_ipa or posix), host and base_dn. Optional keys:
+# port (636), tls (true), cacert (PEM text, needed if the system trust store
+# does not trust the LDAP server, and always for foremanctl), account,
+# account_password, groups_base, ldap_filter, ldap_group_membership,
+# attr_login/attr_firstname/attr_lastname/attr_mail/attr_photo (defaults
+# depend on server_type), onthefly_register (true), usergroup_sync (true),
+# organizations/locations (the initial ones), state (present/absent) and
+# group_mappings, a list of:
+#   usergroup: Foreman user group to create
+#   external_group: LDAP group name (defaults to usergroup)
+#   admin: true/false
+#   roles: [Foreman role names]
+#
+# katello_ldap_auth_sources:
+#   - name: Corp AD
+#     server_type: active_directory
+#     host: dc01.corp.example.com
+#     account: svc-foreman@corp.example.com
+#     account_password: "{{ vault_ldap_bind_password }}"
+#     base_dn: DC=corp,DC=example,DC=com
+#     groups_base: OU=Groups,DC=corp,DC=example,DC=com
+#     ldap_filter: (memberOf=CN=Katello Users,OU=Groups,DC=corp,DC=example,DC=com)
+#     cacert: "{{ lookup('file', 'corp-root-ca.pem') }}"
+#     attributes:                 # or attr_login, attr_firstname, ...
+#       login: sAMAccountName
+#       firstname: givenName
+#       lastname: sn
+#       mail: mail
+#       photo: thumbnailPhoto
+#     organizations: all          # or a list; default is the initial one
+#     locations: [Default Location, Datacenter East/Rack 12]
+#     group_mappings:
+#       - usergroup: Katello Admins
+#         external_group: katello-admins
+#         admin: true
+#       - usergroup: Katello Viewers
+#         external_group: katello-viewers
+#         roles: [Viewer]
+katello_ldap_auth_sources: []
+# Internal (local) users. Required: login, and password for a new internal
+# user. Optional: firstname, lastname, mail, description, admin (false),
+# roles, organizations/locations (the initial ones), default_organization,
+# default_location, locale, timezone, auth_source (Internal; or the name of an
+# LDAP source to pre-create an LDAP user), password_update and state.
+#
+# katello_users:
+#   - login: jdoe
+#     password: "{{ vault_jdoe_password }}"
+#     firstname: Jane
+#     lastname: Doe
+#     mail: jdoe@example.com
+#     roles: [Manager]
+#     organizations: [Default Organization, Engineering]
+#     locations: [Default Location]
+#     default_organization: Engineering
+#   - login: svc-ansible
+#     password: "{{ vault_svc_ansible_password }}"
+#     admin: true
+#     description: Automation account
+katello_users: []
+# The API cannot tell whether a password changed, so by default passwords are
+# only set when a user is created. "always" sets them on every run (a user's
+# own password_update overrides this).
+katello_users_password_update: on_create
+# User groups: membership, nesting, LDAP links and role assignments.
+# Keys: name, users (logins), usergroups (nested groups, may be defined later
+# in the list), roles, admin, external_groups (LDAP groups whose members
+# belong to this group: name + auth_source), state. A key you leave out is
+# left as it is on the server, so leave out users for LDAP-synced groups.
+# LDAP group_mappings above are a shortcut for simple one-group cases; a
+# group can appear in both.
+#
+# katello_usergroups:
+#   - name: Content Admins
+#     users: [jdoe]
+#     roles: [Content Importer, Content Exporter, Manager]
+#   - name: Operators
+#     usergroups: [Content Admins, Helpdesk]
+#     roles: [Remote Execution User, Viewer]
+#     external_groups:
+#       - name: katello-operators
+#         auth_source: Corp AD
+#   - name: Helpdesk
+#     roles: [Viewer]
+#   - name: Old Team
+#     state: absent
+katello_usergroups: []
+
+# Run Foreman's "Test LDAP connection" for each source and fail if it fails.
+katello_ldap_test_connection: true
+
+# Organizations and locations to create after the install. The initial
+# organization and location already exist. Locations are created in list
+# order, so list a parent before its children.
+#
+# katello_organizations:
+#   - name: Engineering
+#     label: engineering          # optional, cannot be changed later
+#     description: Engineering hosts
+# katello_locations:
+#   - name: Datacenter East
+#     organizations: [Default Organization, Engineering]
+#   - name: Rack 12
+#     parent: Datacenter East
+katello_organizations: []
+katello_locations: []
+
+# Content credentials (GPG keys or SSL certificates). The text comes from one
+# of "content", "file" (path on the Ansible controller) or "url" (downloaded
+# by the controller). organization defaults to katello_initial_organization.
+#
+# katello_content_credentials:
+#   - name: RPM-GPG-KEY-AlmaLinux-9
+#     url: https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-9
+#   - name: Internal CA
+#     content_type: cert
+#     file: files/internal-ca.pem
+katello_content_credentials: []
+
+# Products and their repositories. organization defaults to
+# katello_initial_organization; repository content_type defaults to yum.
+# Repositories accept url, gpg_key, ssl_ca_cert, ssl_client_cert,
+# ssl_client_key, download_policy, mirroring_policy, verify_ssl_on_sync,
+# upstream_username, upstream_password, http_proxy_policy, http_proxy,
+# unprotected, os_versions, arch, checksum_type, retain_package_versions_count,
+# ignorable_content, docker_upstream_name, include_tags, exclude_tags,
+# deb_releases, deb_components, deb_architectures, label, description,
+# state and sync.
+#
+# katello_products:
+#   - name: AlmaLinux 9
+#     gpg_key: RPM-GPG-KEY-AlmaLinux-9
+#     repositories:
+#       - name: AlmaLinux 9 BaseOS x86_64
+#         url: https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/
+#         download_policy: on_demand
+#         os_versions: [rhel-9]
+#       - name: AlmaLinux 9 AppStream x86_64
+#         url: https://repo.almalinux.org/almalinux/9/AppStream/x86_64/os/
+#         download_policy: on_demand
+#         os_versions: [rhel-9]
+katello_products: []
+# Sync every repository after creating it. A repository's "sync" overrides it.
+# Syncs can take a long time and always report a change.
+katello_sync_repositories: false
+
+# Red Hat subscription manifests, one per organization. "file" is the manifest
+# zip on the Ansible controller, or on the Katello server with
+# remote_src: true. Uploading the same manifest again is a no-op; a newer
+# manifest replaces the old one. repository_url sets the organization's Red
+# Hat CDN URL (for example https://cdn.redhat.com or a Satellite/disconnected
+# CDN). state is present (upload), refreshed (refresh the manifest already on
+# the server from the Red Hat portal) or absent (delete it).
+#
+# katello_subscription_manifests:
+#   - organization: ACME
+#     file: files/manifest_acme.zip
+#   - organization: Lab
+#     file: /root/manifest_lab.zip
+#     remote_src: true
+#     repository_url: https://cdn.redhat.com
+katello_subscription_manifests: []
+
+# Red Hat repositories to enable from a manifest. Identify the repository set
+# by "label" or by "name" (plus "product" if the name is ambiguous), and list
+# the releasever/basearch combinations in "repositories" or set
+# all_repositories: true. state is enabled or disabled. "sync" (default
+# katello_sync_repositories) syncs every enabled repository of the set.
+#
+# katello_redhat_repositories:
+#   - organization: ACME
+#     label: rhel-9-for-x86_64-baseos-rpms
+#     repositories:
+#       - releasever: "9"
+#   - organization: ACME
+#     name: Red Hat Enterprise Linux 9 for x86_64 - AppStream (RPMs)
+#     product: Red Hat Enterprise Linux for x86_64
+#     repositories:
+#       - releasever: "9"
+#     sync: true
+#   - organization: ACME
+#     label: satellite-client-6-for-rhel-9-x86_64-rpms
+#     all_repositories: true
+katello_redhat_repositories: []
+
+# Hide the installer command (it contains the admin password) from logs.
+katello_no_log: true

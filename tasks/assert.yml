@@ -1,0 +1,258 @@
+---
+- name: Assert the operating system is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] in _katello_supported_distributions
+      - ansible_facts['distribution_major_version'] == '9'
+      - ansible_facts['architecture'] == 'x86_64'
+    fail_msg: >-
+      Katello {{ katello_version }} is supported by this role on RHEL 9 and
+      AlmaLinux 9 (x86_64) only. Found {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }} ({{ ansible_facts['architecture'] }}).
+    quiet: true
+
+- name: Assert the install method is valid
+  ansible.builtin.assert:
+    that:
+      - katello_install_method in _katello_supported_methods
+    fail_msg: "katello_install_method must be one of {{ _katello_supported_methods | join(', ') }}."
+    quiet: true
+
+- name: Assert the deployment type and SSL mode are valid
+  ansible.builtin.assert:
+    that:
+      - katello_deployment in _katello_supported_deployments
+      - katello_ssl_mode in _katello_ssl_modes
+    fail_msg: >-
+      katello_deployment must be one of {{ _katello_supported_deployments | join(', ') }} and
+      katello_ssl_mode one of {{ _katello_ssl_modes | join(', ') }}.
+    quiet: true
+
+- name: Assert the supplied certificate is complete
+  ansible.builtin.assert:
+    that:
+      - katello_ssl_server_cert is search('-----BEGIN CERTIFICATE-----')
+      - katello_ssl_ca_bundle is search('-----BEGIN CERTIFICATE-----')
+      - katello_ssl_server_key is search('-----BEGIN (RSA |EC )?PRIVATE KEY-----')
+      - katello_ssl_server_key is not search('ENCRYPTED')
+    fail_msg: >-
+      katello_ssl_mode: custom needs katello_ssl_server_cert, katello_ssl_ca_bundle and an
+      unencrypted katello_ssl_server_key, all in PEM format.
+    quiet: true
+  when: katello_ssl_mode == 'custom'
+
+- name: Assert the smart proxy settings are complete
+  ansible.builtin.assert:
+    that:
+      - katello_proxy_server | length > 0
+      - katello_proxy_server in groups['all']
+      - katello_proxy_server_fqdn | length > 0
+      - katello_proxy_server_fqdn != katello_hostname
+    fail_msg: >-
+      katello_deployment: proxy needs katello_proxy_server set to the inventory name of the
+      Katello server (found '{{ katello_proxy_server }}'), and the proxy must have its own FQDN.
+    quiet: true
+  when:
+    - katello_deployment == 'proxy'
+    - katello_run_installer | bool
+
+- name: Assert plugins use a supported install method
+  ansible.builtin.assert:
+    that:
+      - katello_install_method == 'installer'
+        or (katello_foreman_plugins + katello_foreman_proxy_plugins + katello_foreman_cli_plugins) | length == 0
+      - (katello_foreman_plugins + katello_foreman_proxy_plugins + katello_foreman_cli_plugins)
+        | reject('match', '^[a-z0-9_-]+$') | list | length == 0
+    fail_msg: >-
+      Plugin names may only use lowercase letters, digits, hyphens and underscores. With
+      katello_install_method: foremanctl, list features in katello_foremanctl_features instead
+      (see "foremanctl features").
+    quiet: true
+
+- name: Assert the tuning settings fit the deployment
+  ansible.builtin.assert:
+    that:
+      - katello_deployment == 'server' or katello_tuning | length == 0
+      - katello_install_method == 'installer' or katello_custom_hiera | length == 0
+      - katello_tuning in [''] + ['auto'] + _katello_tuning_profile_order
+      - katello_managed_hosts | int >= 0
+    fail_msg: >-
+      katello_tuning must be empty, auto or one of {{ _katello_tuning_profile_order | join(', ') }};
+      smart proxies cannot use tuning profiles; katello_custom_hiera only works with
+      katello_install_method: installer.
+    quiet: true
+
+- name: Assert the initial admin password is set
+  ansible.builtin.assert:
+    that:
+      - katello_admin_password | length >= 8
+    fail_msg: "katello_admin_password must be set and at least 8 characters long."
+    quiet: true
+  when: katello_run_installer | bool
+
+- name: Assert the hostname is a lowercase FQDN
+  ansible.builtin.assert:
+    that:
+      - katello_hostname is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$')
+    fail_msg: >-
+      katello_hostname '{{ katello_hostname }}' must be a fully qualified domain
+      name using only lowercase letters, numbers, dots and hyphens.
+    quiet: true
+
+- name: Assert the LDAP auth sources are complete
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0
+      - item.server_type | default('') in _katello_ldap_server_types
+      - item.host is defined and item.host | length > 0
+      - item.base_dn is defined and item.base_dn | length > 0
+      - item.account is not defined or (item.account_password | default('') | length > 0)
+      - item.state | default('present') in ['present', 'absent']
+      - (item.group_mappings | default([]) | rejectattr('usergroup', 'defined') | list | length) == 0
+      - item.attributes | default({}) is mapping
+      - (item.attributes | default({}) | list | difference(_katello_ldap_attribute_keys) | length) == 0
+      - item.organizations | default([]) == 'all' or item.organizations | default([]) | type_debug == 'list'
+      - item.locations | default([]) == 'all' or item.locations | default([]) | type_debug == 'list'
+    fail_msg: >-
+      LDAP auth source '{{ item.name | default('(unnamed)') }}' needs name, host, base_dn,
+      server_type ({{ _katello_ldap_server_types | join(', ') }}), account_password when
+      account is set, and a usergroup on every group mapping. attributes may only use
+      {{ _katello_ldap_attribute_keys | join(', ') }}, and organizations/locations must be
+      a list or "all".
+    quiet: true
+  loop: "{{ katello_ldap_auth_sources }}"
+  loop_control:
+    label: "{{ item.name | default('(unnamed)') }}"
+
+- name: Assert the organizations and locations have names
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0
+      - item.state | default('present') in _katello_states
+    fail_msg: "Every entry in katello_organizations and katello_locations needs a name and a state of present or absent."
+    quiet: true
+  loop: "{{ katello_organizations + katello_locations }}"
+  loop_control:
+    label: "{{ item.name | default('(unnamed)') }}"
+
+- name: Assert the content credentials are complete
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0
+      - item.content_type | default('gpg_key') in _katello_content_credential_types
+      - item.state | default('present') in _katello_states
+      - item.state | default('present') == 'absent'
+        or (['content', 'file', 'url'] | select('in', item.keys()) | list | length) == 1
+    fail_msg: >-
+      Content credential '{{ item.name | default('(unnamed)') }}' needs a name, a content_type
+      of gpg_key or cert, and exactly one of content, file or url.
+    quiet: true
+  loop: "{{ katello_content_credentials }}"
+  loop_control:
+    label: "{{ item.name | default('(unnamed)') }}"
+
+- name: Assert the products are complete
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0
+      - item.state | default('present') in _katello_states
+      - item.repositories | default([]) | type_debug == 'list'
+    fail_msg: "Product '{{ item.name | default('(unnamed)') }}' needs a name, and repositories must be a list."
+    quiet: true
+  loop: "{{ katello_products }}"
+  loop_control:
+    label: "{{ item.name | default('(unnamed)') }}"
+
+- name: Assert the repositories are complete
+  ansible.builtin.assert:
+    that:
+      - item.1.name is defined and item.1.name | length > 0
+      - item.1.content_type | default('yum') in _katello_repository_content_types
+      - item.1.state | default('present') in _katello_states
+    fail_msg: >-
+      Repository '{{ item.1.name | default('(unnamed)') }}' in product '{{ item.0.name }}' needs a
+      name and a content_type of {{ _katello_repository_content_types | join(', ') }}.
+    quiet: true
+  loop: "{{ katello_products | subelements('repositories', skip_missing=true) }}"
+  loop_control:
+    label: "{{ item.0.name | default('(unnamed)') }}: {{ item.1.name | default('(unnamed)') }}"
+
+- name: Assert the subscription manifests are complete
+  ansible.builtin.assert:
+    that:
+      - item.state | default('present') in _katello_manifest_states
+      - item.state | default('present') != 'present' or item.file | default('') | length > 0
+    fail_msg: >-
+      Subscription manifest for '{{ item.organization | default(katello_initial_organization) }}'
+      needs a state of {{ _katello_manifest_states | join(', ') }} and, when present, a "file".
+    quiet: true
+  loop: "{{ katello_subscription_manifests }}"
+  loop_control:
+    label: "{{ item.organization | default(katello_initial_organization) }}"
+
+- name: Assert there is at most one manifest per organization
+  ansible.builtin.assert:
+    that:
+      - _katello_manifest_orgs | length == _katello_manifest_orgs | unique | length
+    fail_msg: "katello_subscription_manifests lists an organization more than once."
+    quiet: true
+  vars:
+    _katello_manifest_orgs: "{{ katello_subscription_manifests | map(attribute='organization', default=katello_initial_organization) | list }}"
+
+- name: Assert the Red Hat repositories are complete
+  ansible.builtin.assert:
+    that:
+      - item.label | default(item.name | default('')) | length > 0
+      - item.state | default('enabled') in _katello_repository_set_states
+      - item.repositories | default([]) | type_debug == 'list'
+      - item.all_repositories | default(false) | bool or item.repositories | default([]) | length > 0
+      - (item.repositories | default([]) | rejectattr('releasever', 'defined') | rejectattr('basearch', 'defined') | list | length) == 0
+    fail_msg: >-
+      Red Hat repository set '{{ item.label | default(item.name | default('(unnamed)')) }}' needs a
+      label or name, a state of enabled or disabled, and either all_repositories: true or a
+      list of repositories with releasever and/or basearch.
+    quiet: true
+  loop: "{{ katello_redhat_repositories }}"
+  loop_control:
+    label: "{{ item.label | default(item.name | default('(unnamed)')) }}"
+
+- name: Assert the users are complete
+  ansible.builtin.assert:
+    that:
+      - item.login is defined and item.login | length > 0
+      - item.state | default('present') in _katello_states
+      - item.password_update | default(katello_users_password_update) in ['on_create', 'always']
+      - item.state | default('present') == 'absent'
+        or item.auth_source | default('Internal') != 'Internal'
+        or item.password | default('') | length > 0
+      - item.organizations | default([]) | type_debug == 'list'
+      - item.locations | default([]) | type_debug == 'list'
+      - item.roles | default([]) | type_debug == 'list'
+    fail_msg: >-
+      User '{{ item.login | default('(no login)') }}' needs a login, a password (internal
+      users), list values for roles/organizations/locations, and password_update of
+      on_create or always.
+    quiet: true
+  loop: "{{ katello_users }}"
+  loop_control:
+    label: "{{ item.login | default('(no login)') }}"
+
+- name: Assert the user groups are complete
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0
+      - item.state | default('present') in _katello_states
+      - item.users | default([]) | type_debug == 'list'
+      - item.usergroups | default([]) | type_debug == 'list'
+      - item.roles | default([]) | type_debug == 'list'
+      - item.name not in (item.usergroups | default([]))
+      - (item.external_groups | default([]) | rejectattr('name', 'defined') | list | length) == 0
+      - (item.external_groups | default([]) | rejectattr('auth_source', 'defined') | list | length) == 0
+    fail_msg: >-
+      User group '{{ item.name | default('(unnamed)') }}' needs a name; users, usergroups and
+      roles must be lists; it cannot contain itself; and every external_groups entry needs a
+      name and an auth_source.
+    quiet: true
+  loop: "{{ katello_usergroups }}"
+  loop_control:
+    label: "{{ item.name | default('(unnamed)') }}"

@@ -1,0 +1,365 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: true
+  vars:
+    _katello_test_url: "https://{{ katello_hostname | default(ansible_facts['fqdn']) }}"
+  tasks:
+    - name: Ping the API
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/ping"
+        validate_certs: false
+      register: _katello_test_ping
+
+    - name: Assert Foreman and every Katello service are healthy
+      ansible.builtin.assert:
+        that:
+          - _katello_test_ping.json.results.foreman.database.active
+          - _katello_test_ping.json.results.katello.status == 'ok'
+          - _katello_test_ping.json.results.katello.services | dict2items
+            | rejectattr('value.status', 'equalto', 'ok') | list | length == 0
+        fail_msg: "{{ _katello_test_ping.json.results }}"
+
+    - name: List organizations as the admin user
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/organizations?search=name%3D%22Molecule+Org%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_orgs
+      no_log: true
+
+    - name: Assert the initial organization exists
+      ansible.builtin.assert:
+        that:
+          - _katello_test_orgs.json.subtotal == 1
+
+    - name: List plugins as the admin user
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/plugins"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_plugins
+      no_log: true
+
+    - name: Assert Katello 5.0 is installed
+      ansible.builtin.assert:
+        that:
+          - _katello_version is version('5.0', '>=')
+          - _katello_version is version('5.1', '<')
+        fail_msg: "Expected Katello 5.0.x, found {{ _katello_version }}"
+      vars:
+        _katello_version: >-
+          {{ (_katello_test_plugins.json.results | selectattr('name', 'equalto', 'katello') | first).version }}
+
+    - name: Check the install fingerprint was recorded
+      ansible.builtin.stat:
+        path: /var/lib/ansible-katello/install.sha256
+      register: _katello_test_state
+
+    - name: Assert the fingerprint exists
+      ansible.builtin.assert:
+        that:
+          - _katello_test_state.stat.exists
+
+    - name: List LDAP auth sources
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/auth_source_ldaps?search=name%3D%22Molecule+LDAP%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_ldap
+      no_log: true
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_HOST') | length > 0
+
+    - name: Assert the LDAP auth source exists
+      ansible.builtin.assert:
+        that:
+          - _katello_test_ldap.json.subtotal == 1
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_HOST') | length > 0
+
+    - name: List user groups linked to LDAP
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/usergroups?search=name%3D%22Molecule+LDAP+Admins%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_usergroups
+      no_log: true
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_HOST') | length > 0
+
+    - name: Assert the admin user group exists and is an admin group
+      ansible.builtin.assert:
+        that:
+          - _katello_test_usergroups.json.subtotal == 1
+          - _katello_test_usergroups.json.results[0].admin
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_HOST') | length > 0
+
+    - name: Find the extra organization
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/organizations?search=name%3D%22Molecule+Extra+Org%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_extra_org
+      no_log: true
+
+    - name: Assert the extra organization exists with its label
+      ansible.builtin.assert:
+        that:
+          - _katello_test_extra_org.json.subtotal == 1
+          - _katello_test_extra_org.json.results[0].label == 'molecule_extra_org'
+
+    - name: Find the nested location
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/locations?search=title%3D%22Molecule+Datacenter%2FMolecule+Rack%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_location
+      no_log: true
+
+    - name: Assert the nested location exists under its parent
+      ansible.builtin.assert:
+        that:
+          - _katello_test_location.json.subtotal == 1
+
+    - name: Look up the Molecule Org ID
+      ansible.builtin.set_fact:
+        _katello_test_org_id: "{{ _katello_test_orgs.json.results[0].id }}"
+
+    - name: Find the GPG key
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/katello/api/v2/content_credentials?organization_id={{ _katello_test_org_id }}&name=RPM-GPG-KEY-AlmaLinux-9"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_gpg
+      no_log: true
+
+    - name: Assert the GPG key exists and has content
+      ansible.builtin.assert:
+        that:
+          - _katello_test_gpg.json.subtotal == 1
+          - _katello_test_gpg.json.results[0].content_type == 'gpg_key'
+          - "'BEGIN PGP PUBLIC KEY BLOCK' in _katello_test_gpg.json.results[0].content"
+
+    - name: Find the product
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/katello/api/v2/products?organization_id={{ _katello_test_org_id }}&name=Molecule+AlmaLinux+9"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_product
+      no_log: true
+
+    - name: Assert the product exists and uses the GPG key
+      ansible.builtin.assert:
+        that:
+          - _katello_test_product.json.subtotal == 1
+          - _katello_test_product.json.results[0].gpg_key_id == _katello_test_gpg.json.results[0].id
+
+    - name: Find the repository
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/katello/api/v2/repositories?organization_id={{ _katello_test_org_id }}&name=AlmaLinux+9+BaseOS+x86_64"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_repo
+      no_log: true
+
+    - name: Assert the repository exists in the product with the right URL
+      ansible.builtin.assert:
+        that:
+          - _katello_test_repo.json.subtotal == 1
+          - _katello_test_repo.json.results[0].product.name == 'Molecule AlmaLinux 9'
+          - _katello_test_repo.json.results[0].url == 'https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/'
+          - _katello_test_repo.json.results[0].content_type == 'yum'
+
+    - name: Read the active tuned profile
+      ansible.builtin.command:
+        argv: [tuned-adm, active]
+      register: _katello_test_tuned
+      changed_when: false
+
+    - name: Read the Transparent Huge Pages setting
+      ansible.builtin.slurp:
+        src: /sys/kernel/mm/transparent_hugepage/enabled
+      register: _katello_test_thp
+
+    - name: Assert the katello tuned profile is active and THP is off
+      ansible.builtin.assert:
+        that:
+          - _katello_test_tuned.stdout is search('katello')
+          - (_katello_test_thp.content | b64decode) is search('\\[never\\]')
+
+    - name: Read the Puma settings written by the installer
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/foreman.service.d/installer.conf
+      register: _katello_test_puma
+      when: katello_install_method == 'installer'
+
+    - name: Count the Dynflow workers
+      ansible.builtin.shell:
+        cmd: set -o pipefail && systemctl list-units --all --plain --no-legend 'dynflow-sidekiq@worker-*' | wc -l
+      register: _katello_test_dynflow
+      changed_when: false
+      when: katello_install_method == 'installer'
+
+    - name: Assert the recommended Puma threads and Dynflow workers are applied
+      ansible.builtin.assert:
+        that:
+          - (_katello_test_puma.content | b64decode) is search('FOREMAN_PUMA_THREADS_MAX=16')
+          - _katello_test_dynflow.stdout | int == 3
+        fail_msg: "{{ _katello_test_puma.content | b64decode }}"
+      when: katello_install_method == 'installer'
+
+    - name: Find the internal user
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/users?search=login%3D%22molecule.user%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_user_list
+      no_log: true
+
+    - name: Read the internal user
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/users/{{ _katello_test_user_list.json.results[0].id }}"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_user
+      no_log: true
+
+    - name: Assert the internal user has its details, role, organizations and location
+      ansible.builtin.assert:
+        that:
+          - _katello_test_user.json.mail == 'molecule.user@example.com'
+          - _katello_test_user.json.auth_source_name == 'Internal'
+          - not _katello_test_user.json.admin
+          - "'Viewer' in (_katello_test_user.json.roles | map(attribute='name') | list)"
+          - (_katello_test_user.json.organizations | map(attribute='name') | sort) == ['Molecule Extra Org', 'Molecule Org']
+          - "'Molecule Location' in (_katello_test_user.json.locations | map(attribute='name') | list)"
+          - _katello_test_user.json.default_organization.name == 'Molecule Extra Org'
+
+    - name: Log in as the internal user with its password
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/current_user"
+        user: molecule.user
+        password: Molecule-Pass-123
+        force_basic_auth: true
+        validate_certs: false
+      no_log: true
+
+    - name: Find the operators group
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/usergroups?search=name%3D%22Molecule+Operators%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_ops_list
+      no_log: true
+
+    - name: Read the operators group
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/usergroups/{{ _katello_test_ops_list.json.results[0].id }}"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_ops
+      no_log: true
+
+    - name: Find the helpdesk group
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/usergroups?search=name%3D%22Molecule+Helpdesk%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_help_list
+      no_log: true
+
+    - name: Read the helpdesk group
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/usergroups/{{ _katello_test_help_list.json.results[0].id }}"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_help
+      no_log: true
+
+    - name: Assert group membership, nesting and roles
+      ansible.builtin.assert:
+        that:
+          - "'molecule.user' in (_katello_test_help.json.users | map(attribute='login') | list)"
+          - "'Viewer' in (_katello_test_help.json.roles | map(attribute='name') | list)"
+          - "'Molecule Helpdesk' in (_katello_test_ops.json.usergroups | map(attribute='name') | list)"
+          - "'Manager' in (_katello_test_ops.json.roles | map(attribute='name') | list)"
+
+    - name: Read the LDAP auth source
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/auth_source_ldaps/{{ _katello_test_ldap.json.results[0].id }}"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_ldap_detail
+      no_log: true
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_HOST') | length > 0
+
+    - name: Assert the LDAP source is in every organization and the chosen locations
+      ansible.builtin.assert:
+        that:
+          - (_katello_test_ldap_detail.json.organizations | map(attribute='name') | sort) is superset(['Molecule Extra Org', 'Molecule Org'])
+          - (_katello_test_ldap_detail.json.locations | map(attribute='title') | sort) == ['Molecule Datacenter/Molecule Rack', 'Molecule Location']
+          - _katello_test_ldap_detail.json.attr_login | length > 0
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_LDAP_HOST') | length > 0
+
+    - name: Read Molecule Org's subscription details
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/katello/api/v2/organizations/{{ _katello_test_org_id }}"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_org_detail
+      no_log: true
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_MANIFEST') | length > 0
+
+    - name: Find the enabled Red Hat repository set
+      ansible.builtin.uri:
+        url: >-
+          {{ _katello_test_url }}/katello/api/v2/repository_sets?organization_id={{ _katello_test_org_id }}&search={{
+             ('label="' ~ lookup('ansible.builtin.env', 'KATELLO_TEST_RH_REPO_LABEL', default='rhel-9-for-x86_64-baseos-rpms') ~ '"')
+             | urlencode }}
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_rhset
+      no_log: true
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_MANIFEST') | length > 0
+
+    - name: Assert the manifest is imported and the Red Hat repository is enabled
+      ansible.builtin.assert:
+        that:
+          - _katello_test_org_detail.json.owner_details.upstreamConsumer is defined
+          - _katello_test_rhset.json.results | length == 1
+          - _katello_test_rhset.json.results[0].repositories | length > 0
+      when: lookup('ansible.builtin.env', 'KATELLO_TEST_MANIFEST') | length > 0

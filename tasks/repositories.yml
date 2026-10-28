@@ -1,0 +1,14 @@
+---
+- name: Enable the RHEL BaseOS and AppStream repositories
+  community.general.rhsm_repository:
+    name: "{{ katello_rhel_repos }}"
+    state: enabled
+  when:
+    - ansible_facts['distribution'] == 'RedHat'
+    - katello_manage_rhel_repos | bool
+
+- name: Install the Foreman and Katello repository packages
+  ansible.builtin.dnf:
+    name: "{{ [katello_foreman_release_rpm, katello_repos_rpm]
+      + ([katello_openvox_release_rpm] if katello_install_method == 'installer' else []) }}"
+    state: present

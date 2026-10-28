@@ -1,0 +1,335 @@
+---
+argument_specs:
+  main:
+    short_description: Install Foreman with Katello 5.0 on RHEL 9 or AlmaLinux 9
+    options:
+      katello_version:
+        type: str
+        default: "5.0"
+        description: Katello release, used in the katello-repos URL.
+      katello_foreman_version:
+        type: str
+        default: "5.0"
+        description: Foreman release, used in the foreman-release URL.
+      katello_deployment:
+        type: str
+        default: server
+        choices: [server, proxy]
+        description: Install a Katello server or a Smart Proxy with content.
+      katello_install_method:
+        type: str
+        default: installer
+        choices: [installer, foremanctl]
+        description: RPM-based foreman-installer, or containerized foremanctl.
+      katello_initial_organization:
+        type: str
+        default: Default Organization
+        description: Initial organization. Its label cannot be changed later.
+      katello_initial_location:
+        type: str
+        default: Default Location
+        description: Initial location.
+      katello_admin_username:
+        type: str
+        default: admin
+        description: Initial admin user name.
+      katello_admin_password:
+        type: str
+        default: ""
+        no_log: true
+        description: Initial admin password. Required when katello_run_installer is true.
+      katello_hostname:
+        type: str
+        description: FQDN of the server. Defaults to the fqdn fact.
+      katello_set_hostname:
+        type: bool
+        default: false
+        description: Set the system hostname to katello_hostname.
+      katello_preflight_checks:
+        type: bool
+        default: true
+        description: Check the documented system requirements before installing.
+      katello_preflight_enforce:
+        type: bool
+        default: true
+        description: Fail on a failed pre-flight check instead of warning.
+      katello_min_memory_mb:
+        type: int
+        description: Minimum RAM in MB (19456 for a server, 11776 for a proxy).
+      katello_min_swap_mb:
+        type: int
+        default: 3900
+        description: Minimum swap in MB.
+      katello_min_cpus:
+        type: int
+        description: Minimum number of CPU cores (from the tuning profile for a server, 4 for a proxy).
+      katello_foreman_release_rpm:
+        type: str
+        description: URL of the foreman-release RPM.
+      katello_repos_rpm:
+        type: str
+        description: URL of the katello-repos RPM.
+      katello_openvox_release_rpm:
+        type: str
+        description: URL of the OpenVox release RPM (installer method only).
+      katello_manage_rhel_repos:
+        type: bool
+        default: true
+        description: On RHEL, enable katello_rhel_repos with subscription-manager.
+      katello_rhel_repos:
+        type: list
+        elements: str
+        description: RHEL repositories to enable.
+      katello_upgrade_packages:
+        type: bool
+        default: true
+        description: Run dnf upgrade before installing.
+      katello_manage_firewall:
+        type: bool
+        default: true
+        description: Open the required ports with firewalld.
+      katello_firewall_extra_services:
+        type: list
+        elements: str
+        default: []
+        description: Extra firewalld services to open.
+      katello_firewall_extra_ports:
+        type: list
+        elements: str
+        default: []
+        description: Extra ports to open, such as 1883/tcp.
+      katello_run_installer:
+        type: bool
+        default: true
+        description: Run the installer. False only prepares the host.
+      katello_force_install:
+        type: bool
+        default: false
+        description: Re-run the installer even if nothing changed.
+      katello_install_timeout:
+        type: int
+        default: 7200
+        description: Seconds the installer may run.
+      katello_tuning:
+        type: str
+        default: ""
+        choices: ["", auto, default, medium, large, extra-large, extra-extra-large]
+        description: Tuning profile passed with --tuning, or auto to pick one.
+      katello_managed_hosts:
+        type: int
+        default: 0
+        description: Expected number of managed hosts, used by katello_tuning auto.
+      katello_tuning_puma_threads:
+        type: int
+        default: 16
+        description: Puma threads per worker (0 keeps the installer default).
+      katello_tuning_puma_workers:
+        type: int
+        default: 0
+        description: Puma workers (0 keeps the installer auto-tuning).
+      katello_tuning_dynflow_workers:
+        type: int
+        default: 3
+        description: Dynflow worker instances (0 keeps the installer default).
+      katello_tuning_postgresql:
+        type: bool
+        default: true
+        description: Apply the guide's PostgreSQL settings for medium and larger profiles.
+      katello_tuning_postgresql_settings:
+        type: dict
+        description: PostgreSQL settings written to custom-hiera.yaml.
+      katello_custom_hiera:
+        type: dict
+        default: {}
+        description: Extra Hiera settings for /etc/foreman-installer/custom-hiera.yaml.
+      katello_os_tuning:
+        type: bool
+        default: true
+        description: Apply a tuned profile with Transparent Huge Pages disabled.
+      katello_tuned_parent_profile:
+        type: str
+        default: throughput-performance
+        description: tuned profile the role's profile is based on.
+      katello_installer_extra_args:
+        type: list
+        elements: str
+        default: []
+        description: Extra foreman-installer arguments.
+      katello_foremanctl_features:
+        type: list
+        elements: str
+        default: []
+        description: Features passed to foremanctl deploy with --add-feature.
+      katello_foremanctl_server_aliases:
+        type: list
+        elements: str
+        default: []
+        description: Extra hostnames passed to foremanctl deploy with --server-alias.
+      katello_foremanctl_extra_args:
+        type: list
+        elements: str
+        default: []
+        description: Extra foremanctl deploy arguments.
+      katello_foreman_plugins:
+        type: list
+        elements: str
+        default: []
+        description: Foreman plugins (--enable-foreman-plugin-NAME).
+      katello_foreman_proxy_plugins:
+        type: list
+        elements: str
+        default: []
+        description: Smart proxy plugins (--enable-foreman-proxy-plugin-NAME).
+      katello_foreman_cli_plugins:
+        type: list
+        elements: str
+        default: []
+        description: Hammer CLI plugins (--enable-foreman-cli-NAME).
+      katello_ssl_mode:
+        type: str
+        default: default
+        choices: [default, custom, selfsigned]
+        description: Installer CA, your own certificate, or a role-generated CA.
+      katello_ssl_dir:
+        type: str
+        default: /root/foreman_cert
+        description: Directory for certificate files on the server.
+      katello_ssl_server_cert:
+        type: str
+        default: ""
+        description: PEM server certificate (custom mode).
+      katello_ssl_server_key:
+        type: str
+        default: ""
+        no_log: true
+        description: PEM unencrypted private key (custom mode).
+      katello_ssl_ca_bundle:
+        type: str
+        default: ""
+        description: PEM CA bundle, root first (custom mode).
+      katello_ssl_extra_sans:
+        type: list
+        elements: str
+        default: []
+        description: Extra SANs for selfsigned certificates, such as DNS:alias.example.com.
+      katello_ssl_selfsigned_key_size:
+        type: int
+        default: 4096
+        description: RSA key size for selfsigned keys.
+      katello_ssl_selfsigned_days:
+        type: int
+        default: 825
+        description: Validity of selfsigned server certificates in days.
+      katello_ssl_selfsigned_ca_days:
+        type: int
+        default: 3650
+        description: Validity of the selfsigned CA in days.
+      katello_ssl_selfsigned_ca_common_name:
+        type: str
+        description: Common name of the selfsigned CA.
+      katello_ssl_selfsigned_subject:
+        type: dict
+        description: Subject fields (O, OU, C, ST, L) for selfsigned certificates.
+      katello_proxy_server:
+        type: str
+        default: ""
+        description: Inventory name of the Katello server (proxy deployment).
+      katello_proxy_server_fqdn:
+        type: str
+        description: FQDN of the Katello server. Defaults to katello_proxy_server.
+      katello_proxy_cert_dir:
+        type: str
+        default: /root/smart-proxy_cert
+        description: Directory on the Katello server for proxy certificates.
+      katello_proxy_organizations:
+        type: list
+        elements: str
+        description: Organizations to assign the proxy to.
+      katello_proxy_locations:
+        type: list
+        elements: str
+        description: Locations to assign the proxy to.
+      katello_proxy_regenerate_bundle:
+        type: bool
+        default: false
+        description: Regenerate the proxy certificate bundle.
+      katello_verify:
+        type: bool
+        default: true
+        description: Check /api/v2/ping after installing.
+      katello_verify_validate_certs:
+        type: bool
+        default: false
+        description: Validate the server certificate during the check.
+      katello_verify_retries:
+        type: int
+        default: 30
+        description: Attempts for the API check.
+      katello_verify_delay:
+        type: int
+        default: 10
+        description: Seconds between attempts.
+      katello_ldap_auth_sources:
+        type: list
+        elements: dict
+        default: []
+        description: LDAP / Active Directory auth sources and group mappings. See defaults/main.yml.
+      katello_users:
+        type: list
+        elements: dict
+        default: []
+        description: Internal users (login, password, names, mail, admin, roles, organizations, locations, ...).
+      katello_users_password_update:
+        type: str
+        default: on_create
+        choices: [on_create, always]
+        description: When to send user passwords to Foreman.
+      katello_usergroups:
+        type: list
+        elements: dict
+        default: []
+        description: User groups (name, users, usergroups, roles, admin, external_groups, state).
+      katello_ldap_test_connection:
+        type: bool
+        default: true
+        description: Test each LDAP auth source through the Foreman API.
+      katello_organizations:
+        type: list
+        elements: dict
+        default: []
+        description: Organizations to create (name, label, description, parameters, state).
+      katello_locations:
+        type: list
+        elements: dict
+        default: []
+        description: Locations to create (name, parent, organizations, description, parameters, state).
+      katello_content_credentials:
+        type: list
+        elements: dict
+        default: []
+        description: GPG keys and certificates (name, content_type, content/file/url, organization, state).
+      katello_products:
+        type: list
+        elements: dict
+        default: []
+        description: Products and their repositories. See defaults/main.yml.
+      katello_sync_repositories:
+        type: bool
+        default: false
+        description: Sync repositories after creating them.
+      katello_subscription_manifests:
+        type: list
+        elements: dict
+        default: []
+        description: Red Hat subscription manifests (organization, file, remote_src, repository_url, state).
+      katello_redhat_repositories:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          Red Hat repository sets to enable (organization, label or name, product, repositories,
+          all_repositories, state, sync).
+      katello_no_log:
+        type: bool
+        default: true
+        description: Hide the installer command and output from logs.

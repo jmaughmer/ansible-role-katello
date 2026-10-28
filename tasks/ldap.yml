@@ -1,0 +1,134 @@
+---
+- name: Reset the LDAP auth source list
+  ansible.builtin.set_fact:
+    _katello_ldap_sources: []
+
+- name: Look up all organizations and locations
+  ansible.builtin.uri:
+    url: "https://{{ katello_hostname }}/api/v2/{{ item }}?per_page=all"
+    user: "{{ katello_admin_username }}"
+    password: "{{ katello_admin_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ katello_verify_validate_certs | bool }}"
+  loop: [organizations, locations]
+  register: _katello_ldap_taxonomies
+  no_log: true
+  when: >-
+    katello_ldap_auth_sources | selectattr('organizations', 'defined') | selectattr('organizations', 'equalto', 'all') | list | length > 0
+    or katello_ldap_auth_sources | selectattr('locations', 'defined') | selectattr('locations', 'equalto', 'all') | list | length > 0
+
+# Merge order: common defaults, then server_type defaults, then the entry's
+# own keys, then its "attributes" mapping (login, firstname, lastname, mail,
+# photo become attr_login, ...). organizations/locations "all" become every
+# organization/location on the server (locations by title, e.g. "East/Rack 12").
+- name: Build the LDAP auth source list with defaults applied
+  ansible.builtin.set_fact:
+    _katello_ldap_sources: >-
+      {{ _katello_ldap_sources
+         + [_katello_ldap_common_defaults
+            | combine(_katello_ldap_type_defaults[item.server_type])
+            | combine(item)
+            | combine(dict(item.attributes | default({}) | dict2items
+                           | map(attribute='key') | map('regex_replace', '^', 'attr_')
+                           | zip(item.attributes | default({}) | dict2items | map(attribute='value'))))
+            | combine({'organizations': _katello_all_orgs} if item.organizations | default('') == 'all' else {})
+            | combine({'locations': _katello_all_locations} if item.locations | default('') == 'all' else {})] }}
+  vars:
+    _katello_all_orgs: >-
+      {{ (_katello_ldap_taxonomies.results | default([]) | selectattr('item', 'equalto', 'organizations')
+          | map(attribute='json.results') | first | default([])) | map(attribute='name') | list }}
+    _katello_all_locations: >-
+      {{ (_katello_ldap_taxonomies.results | default([]) | selectattr('item', 'equalto', 'locations')
+          | map(attribute='json.results') | first | default([])) | map(attribute='title') | list }}
+  loop: "{{ katello_ldap_auth_sources }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Configure LDAP authentication through the Foreman API
+  module_defaults:
+    group/theforeman.foreman.foreman:
+      server_url: "https://{{ katello_hostname }}"
+      username: "{{ katello_admin_username }}"
+      password: "{{ katello_admin_password }}"
+      validate_certs: "{{ katello_verify_validate_certs | bool }}"
+  block:
+    - name: Create LDAP auth sources
+      theforeman.foreman.auth_source_ldap:
+        name: "{{ item.name }}"
+        server_type: "{{ item.server_type }}"
+        host: "{{ item.host }}"
+        port: "{{ item.port }}"
+        tls: "{{ item.tls }}"
+        cacert: "{{ item.cacert | default(omit) }}"
+        account: "{{ item.account | default(omit) }}"
+        account_password: "{{ item.account_password | default(omit) }}"
+        base_dn: "{{ item.base_dn }}"
+        groups_base: "{{ item.groups_base | default(omit) }}"
+        ldap_filter: "{{ item.ldap_filter | default(omit) }}"
+        ldap_group_membership: "{{ item.ldap_group_membership | default(omit) }}"
+        attr_login: "{{ item.attr_login }}"
+        attr_firstname: "{{ item.attr_firstname }}"
+        attr_lastname: "{{ item.attr_lastname }}"
+        attr_mail: "{{ item.attr_mail }}"
+        attr_photo: "{{ item.attr_photo | default(omit) }}"
+        onthefly_register: "{{ item.onthefly_register }}"
+        usergroup_sync: "{{ item.usergroup_sync }}"
+        organizations: "{{ item.organizations }}"
+        locations: "{{ item.locations }}"
+        state: "{{ item.state }}"
+      loop: "{{ _katello_ldap_sources }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: "{{ katello_no_log | bool }}"
+
+    - name: Create Foreman user groups for LDAP groups
+      theforeman.foreman.usergroup:
+        name: "{{ item.1.usergroup }}"
+        admin: "{{ item.1.admin | default(omit) }}"
+        roles: "{{ item.1.roles | default(omit) }}"
+        state: present
+      loop: "{{ _katello_ldap_sources | rejectattr('state', 'equalto', 'absent') | subelements('group_mappings', skip_missing=true) }}"
+      loop_control:
+        label: "{{ item.1.usergroup }}"
+
+    - name: Link LDAP groups to Foreman user groups
+      theforeman.foreman.external_usergroup:
+        name: "{{ item.1.external_group | default(item.1.usergroup) }}"
+        usergroup: "{{ item.1.usergroup }}"
+        auth_source: "{{ item.0.name }}"
+        state: present
+      loop: "{{ _katello_ldap_sources | rejectattr('state', 'equalto', 'absent') | subelements('group_mappings', skip_missing=true) }}"
+      loop_control:
+        label: "{{ item.0.name }}: {{ item.1.external_group | default(item.1.usergroup) }} -> {{ item.1.usergroup }}"
+
+- name: Test the LDAP connections
+  when: katello_ldap_test_connection | bool
+  block:
+    - name: Look up LDAP auth source IDs
+      ansible.builtin.uri:
+        url: "https://{{ katello_hostname }}/api/v2/auth_source_ldaps?per_page=1000"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ katello_verify_validate_certs | bool }}"
+      register: _katello_ldap_list
+
+    - name: Test each LDAP auth source
+      ansible.builtin.uri:
+        url: "https://{{ katello_hostname }}/api/v2/auth_source_ldaps/{{ _katello_ldap_id }}/test"
+        method: PUT
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ katello_verify_validate_certs | bool }}"
+      vars:
+        _katello_ldap_id: >-
+          {{ (_katello_ldap_list.json.results | selectattr('name', 'equalto', item.name) | first).id }}
+      register: _katello_ldap_test
+      failed_when: >-
+        _katello_ldap_test.status != 200
+        or not (_katello_ldap_test.json.success | default(false))
+      loop: "{{ _katello_ldap_sources | rejectattr('state', 'equalto', 'absent') }}"
+      loop_control:
+        label: "{{ item.name }}"

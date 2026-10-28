@@ -1,0 +1,37 @@
+---
+# Checks from "Configuring Foreman server with a custom SSL certificate".
+- name: Read the server certificate
+  community.crypto.x509_certificate_info:
+    path: "{{ _katello_ssl_check.cert }}"
+  register: _katello_ssl_cert_info
+
+- name: Read the server private key
+  community.crypto.openssl_privatekey_info:
+    path: "{{ _katello_ssl_check.key }}"
+    check_consistency: true
+  register: _katello_ssl_key_info
+  failed_when: false
+
+- name: Verify the certificate chain
+  ansible.builtin.command:
+    argv: [openssl, verify, -CAfile, "{{ _katello_ssl_check.ca }}", "{{ _katello_ssl_check.cert }}"]
+  register: _katello_ssl_verify
+  changed_when: false
+  failed_when: false
+
+- name: Assert the certificate meets the requirements
+  ansible.builtin.assert:
+    that:
+      - _katello_ssl_key_info.can_load_key | default(false)
+      - _katello_ssl_key_info.public_key | default('') == _katello_ssl_cert_info.public_key
+      - not _katello_ssl_cert_info.expired
+      - "'CA:TRUE' not in (_katello_ssl_cert_info.basic_constraints | default([]))"
+      - "('DNS:' ~ _katello_ssl_check.fqdn) in (_katello_ssl_cert_info.subject_alt_name | default([]))"
+      - "'Key Encipherment' in (_katello_ssl_cert_info.key_usage | default([]))"
+      - _katello_ssl_verify.rc == 0
+    fail_msg: >-
+      The server certificate {{ _katello_ssl_check.cert }} is not usable. It must match the
+      private key (which must not have a passphrase), be unexpired, not be a CA
+      certificate, have a DNS:{{ _katello_ssl_check.fqdn }} subject alternative name, allow
+      Key Encipherment, and verify against the CA bundle (openssl verify said:
+      {{ (_katello_ssl_verify.stdout ~ ' ' ~ _katello_ssl_verify.stderr) | trim }}).

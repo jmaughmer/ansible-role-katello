@@ -1,0 +1,99 @@
+---
+- name: Look up existing users
+  ansible.builtin.uri:
+    url: "https://{{ katello_hostname }}/api/v2/users?per_page=all"
+    user: "{{ katello_admin_username }}"
+    password: "{{ katello_admin_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ katello_verify_validate_certs | bool }}"
+  register: _katello_existing_users
+  no_log: true
+
+# The Foreman API never returns passwords, so setting one always reports a
+# change. By default a password is only sent when the user is created.
+- name: Create internal users
+  theforeman.foreman.user:
+    server_url: "https://{{ katello_hostname }}"
+    username: "{{ katello_admin_username }}"
+    password: "{{ katello_admin_password }}"
+    validate_certs: "{{ katello_verify_validate_certs | bool }}"
+    login: "{{ item.login }}"
+    user_password: >-
+      {{ item.password
+         if (item.password is defined
+             and (item.login not in _katello_existing_logins
+                  or item.password_update | default(katello_users_password_update) == 'always'))
+         else omit }}
+    firstname: "{{ item.firstname | default(omit) }}"
+    lastname: "{{ item.lastname | default(omit) }}"
+    mail: "{{ item.mail | default(omit) }}"
+    description: "{{ item.description | default(omit) }}"
+    admin: "{{ item.admin | default(false) }}"
+    roles: "{{ item.roles | default(omit) }}"
+    auth_source: "{{ item.auth_source | default('Internal') }}"
+    organizations: "{{ item.organizations | default([katello_initial_organization]) }}"
+    locations: "{{ item.locations | default([katello_initial_location]) }}"
+    default_organization: "{{ item.default_organization | default(omit) }}"
+    default_location: "{{ item.default_location | default(omit) }}"
+    locale: "{{ item.locale | default(omit) }}"
+    timezone: "{{ item.timezone | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  vars:
+    _katello_existing_logins: "{{ _katello_existing_users.json.results | map(attribute='login') | list }}"
+  loop: "{{ katello_users }}"
+  loop_control:
+    label: "{{ item.login }}"
+  no_log: "{{ katello_no_log | bool }}"
+
+# Groups are applied in passes so a group can contain groups defined later in
+# the list: create them with users and roles, then nest them, then link LDAP
+# groups, then delete the ones marked absent. A key left out (users, roles,
+# usergroups) leaves that part of an existing group unchanged.
+- name: Configure user groups through the Foreman API
+  module_defaults:
+    group/theforeman.foreman.foreman:
+      server_url: "https://{{ katello_hostname }}"
+      username: "{{ katello_admin_username }}"
+      password: "{{ katello_admin_password }}"
+      validate_certs: "{{ katello_verify_validate_certs | bool }}"
+  vars:
+    _katello_present_groups: "{{ katello_usergroups | rejectattr('state', 'defined') | list
+      + (katello_usergroups | selectattr('state', 'defined') | rejectattr('state', 'equalto', 'absent') | list) }}"
+  block:
+    - name: Create user groups with their users and roles
+      theforeman.foreman.usergroup:
+        name: "{{ item.name }}"
+        admin: "{{ item.admin | default(omit) }}"
+        roles: "{{ item.roles | default(omit) }}"
+        users: "{{ item.users | default(omit) }}"
+        state: present
+      loop: "{{ _katello_present_groups }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Nest user groups
+      theforeman.foreman.usergroup:
+        name: "{{ item.name }}"
+        usergroups: "{{ item.usergroups }}"
+        state: present
+      loop: "{{ _katello_present_groups | selectattr('usergroups', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}: {{ item.usergroups | join(', ') }}"
+
+    - name: Link LDAP groups to user groups
+      theforeman.foreman.external_usergroup:
+        name: "{{ item.1.name }}"
+        usergroup: "{{ item.0.name }}"
+        auth_source: "{{ item.1.auth_source }}"
+        state: "{{ item.1.state | default('present') }}"
+      loop: "{{ _katello_present_groups | subelements('external_groups', skip_missing=true) }}"
+      loop_control:
+        label: "{{ item.0.name }} <- {{ item.1.auth_source }}: {{ item.1.name }}"
+
+    - name: Delete user groups marked absent
+      theforeman.foreman.usergroup:
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ katello_usergroups | selectattr('state', 'defined') | selectattr('state', 'equalto', 'absent') | list }}"
+      loop_control:
+        label: "{{ item.name }}"

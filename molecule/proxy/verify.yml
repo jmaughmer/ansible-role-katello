@@ -1,0 +1,62 @@
+---
+- name: Verify the smart proxy
+  hosts: katello-proxy
+  gather_facts: false
+  vars:
+    _katello_test_url: "https://{{ katello_proxy_server_fqdn }}"
+  tasks:
+    - name: Look up the smart proxy
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/smart_proxies?search=name%3D%22{{ katello_hostname | urlencode }}%22"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_proxies
+      no_log: true
+
+    - name: Assert the smart proxy is registered
+      ansible.builtin.assert:
+        that:
+          - _katello_test_proxies.json.subtotal == 1
+
+    - name: Read the smart proxy details
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/api/v2/smart_proxies/{{ _katello_test_proxies.json.results[0].id }}"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_proxy
+      no_log: true
+
+    - name: Assert it serves content and is in the initial organization and location
+      ansible.builtin.assert:
+        that:
+          - "'Pulpcore' in (_katello_test_proxy.json.features | map(attribute='name') | list)"
+          - "'Molecule Org' in (_katello_test_proxy.json.organizations | map(attribute='name') | list)"
+          - "'Molecule Location' in (_katello_test_proxy.json.locations | map(attribute='name') | list)"
+        fail_msg: "{{ _katello_test_proxy.json }}"
+
+    - name: Read the proxy's web certificate
+      community.crypto.get_certificate:
+        host: "{{ katello_hostname }}"
+        port: 443
+      register: _katello_test_proxy_cert
+      delegate_to: localhost
+      when: katello_ssl_mode == 'selfsigned'
+
+    - name: Read the server's web certificate
+      community.crypto.get_certificate:
+        host: "{{ katello_proxy_server_fqdn }}"
+        port: 443
+      register: _katello_test_server_cert
+      delegate_to: localhost
+      when: katello_ssl_mode == 'selfsigned'
+
+    - name: Assert both certificates come from the role-generated CA
+      ansible.builtin.assert:
+        that:
+          - _katello_test_proxy_cert.issuer.CN == _katello_test_server_cert.issuer.CN
+          - _katello_test_proxy_cert.issuer.CN is search('^Katello CA ')
+      when: katello_ssl_mode == 'selfsigned'

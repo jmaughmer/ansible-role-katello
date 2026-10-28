@@ -1,0 +1,32 @@
+---
+- name: Configure organizations and locations through the Foreman API
+  module_defaults:
+    group/theforeman.foreman.foreman:
+      server_url: "https://{{ katello_hostname }}"
+      username: "{{ katello_admin_username }}"
+      password: "{{ katello_admin_password }}"
+      validate_certs: "{{ katello_verify_validate_certs | bool }}"
+  block:
+    - name: Create organizations
+      theforeman.foreman.organization:
+        name: "{{ item.name }}"
+        label: "{{ item.label | default(omit) }}"
+        description: "{{ item.description | default(omit) }}"
+        parameters: "{{ item.parameters | default(omit) }}"
+        state: "{{ item.state | default('present') }}"
+      loop: "{{ katello_organizations }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # Locations are processed in list order, so list a parent before its children.
+    - name: Create locations
+      theforeman.foreman.location:
+        name: "{{ item.name }}"
+        parent: "{{ item.parent | default(omit) }}"
+        description: "{{ item.description | default(omit) }}"
+        organizations: "{{ item.organizations | default([katello_initial_organization]) }}"
+        parameters: "{{ item.parameters | default(omit) }}"
+        state: "{{ item.state | default('present') }}"
+      loop: "{{ katello_locations }}"
+      loop_control:
+        label: "{{ (item.parent ~ '/') if item.parent is defined else '' }}{{ item.name }}"

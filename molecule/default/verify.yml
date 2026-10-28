@@ -1,0 +1,753 @@
+---
+- name: Verify the server host
+  hosts: katello-alma9
+  gather_facts: true
+  tasks:
+    - name: Gather package facts
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: Assert the repository and installer packages are installed
+      ansible.builtin.assert:
+        that:
+          - "'foreman-release' in ansible_facts.packages"
+          - "'katello-repos' in ansible_facts.packages"
+          - "'openvox8-release' in ansible_facts.packages"
+          - "'foreman-installer-katello' in ansible_facts.packages"
+          - "'chrony' in ansible_facts.packages"
+          - "'glibc-langpack-en' in ansible_facts.packages"
+
+    - name: Assert the installed repositories target release 5.0
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.packages['foreman-release'][0].version is version('5.0', '>=')
+          - ansible_facts.packages['foreman-release'][0].version is version('5.1', '<')
+
+    - name: List enabled repositories
+      ansible.builtin.command:
+        argv: [dnf, repolist, --enabled]
+      register: _katello_test_repolist
+      changed_when: false
+
+    - name: Assert the Foreman, Katello and OpenVox repositories are enabled
+      ansible.builtin.assert:
+        that:
+          - _katello_test_repolist.stdout is search('(?im)^foreman\s')
+          - _katello_test_repolist.stdout is search('(?im)^katello\s')
+          - _katello_test_repolist.stdout is search('(?im)^pulpcore\s')
+          - _katello_test_repolist.stdout is search('(?im)^candlepin\s')
+          - _katello_test_repolist.stdout is search('(?i)openvox')
+
+    - name: Check that foreman-installer knows the katello scenario
+      ansible.builtin.stat:
+        path: /etc/foreman-installer/scenarios.d/katello.yaml
+      register: _katello_test_scenario
+
+    - name: Assert the katello scenario is present
+      ansible.builtin.assert:
+        that:
+          - _katello_test_scenario.stat.exists
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert chronyd is running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['chronyd.service'].state == 'running'
+
+    - name: Check that no install was attempted
+      ansible.builtin.stat:
+        path: /var/lib/ansible-katello/install.sha256
+      register: _katello_test_state
+
+    - name: Assert the installer did not run
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_state.stat.exists
+
+- name: Verify OS tuning on both hosts
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the katello tuned profile
+      ansible.builtin.slurp:
+        src: /etc/tuned/katello/tuned.conf
+      register: _katello_test_tuned
+
+    - name: Assert the profile extends throughput-performance and disables THP
+      ansible.builtin.assert:
+        that:
+          - "'include=throughput-performance' in (_katello_test_tuned.content | b64decode)"
+          - "'transparent_hugepages=never' in (_katello_test_tuned.content | b64decode)"
+
+- name: Verify the recommended installer settings on the server
+  hosts: katello-alma9
+  gather_facts: false
+  tasks:
+    - name: Read custom-hiera.yaml
+      ansible.builtin.slurp:
+        src: /etc/foreman-installer/custom-hiera.yaml
+      register: _katello_test_hiera
+
+    - name: Parse the role's block
+      ansible.builtin.set_fact:
+        _katello_test_hiera_data: "{{ _katello_test_hiera.content | b64decode | from_yaml }}"
+
+    - name: Assert the PostgreSQL settings for medium and the extra Hiera key are present
+      ansible.builtin.assert:
+        that:
+          - _katello_test_hiera_data['postgresql::server::config_entries']['max_connections'] == 1000
+          - _katello_test_hiera_data['postgresql::server::config_entries']['shared_buffers'] == '2GB'
+          - _katello_test_hiera_data['postgresql::server::config_entries']['work_mem'] == '8MB'
+          - _katello_test_hiera_data['postgresql::server::config_entries']['autovacuum_vacuum_cost_limit'] == 2000
+          - _katello_test_hiera_data['apache::mod::proxy::proxy_timeout'] == 600
+          - "'ANSIBLE MANAGED BLOCK (katello role)' in (_katello_test_hiera.content | b64decode)"
+
+- name: Verify the smart proxy host
+  hosts: katello-proxy-alma9
+  gather_facts: true
+  tasks:
+    - name: Gather package facts
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: Assert the proxy packages are installed and the server packages are not
+      ansible.builtin.assert:
+        that:
+          - "'foreman-release' in ansible_facts.packages"
+          - "'katello-repos' in ansible_facts.packages"
+          - "'openvox8-release' in ansible_facts.packages"
+          - "'foreman-proxy-content' in ansible_facts.packages"
+          - "'foreman-installer-katello' not in ansible_facts.packages"
+
+    - name: Check that no server certificate was generated on the proxy
+      ansible.builtin.stat:
+        path: /root/foreman_cert
+      register: _katello_test_proxy_ssl_dir
+
+    - name: Assert the proxy has no server certificate directory
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_proxy_ssl_dir.stat.exists
+
+    - name: Check that custom-hiera.yaml was not touched on the proxy
+      ansible.builtin.command:
+        argv: [grep, -c, "ANSIBLE MANAGED BLOCK (katello role)", /etc/foreman-installer/custom-hiera.yaml]
+      register: _katello_test_proxy_hiera
+      changed_when: false
+      failed_when: _katello_test_proxy_hiera.stdout | default('0') | int != 0
+
+- name: Verify the self-signed certificate
+  hosts: katello-alma9
+  gather_facts: false
+  vars:
+    _katello_test_ssl_dir: /root/foreman_cert
+  tasks:
+    - name: Stat the certificate files
+      ansible.builtin.stat:
+        path: "{{ _katello_test_ssl_dir }}/{{ item }}"
+      loop: [foreman_cert.pem, foreman_cert_key.pem, ca_cert_bundle.pem, ca_key.pem]
+      register: _katello_test_ssl_stat
+
+    - name: Assert the files exist and the keys are private
+      ansible.builtin.assert:
+        that:
+          - _katello_test_ssl_stat.results | map(attribute='stat.exists') | list is all
+          - _katello_test_ssl_stat.results[1].stat.mode == '0600'
+          - _katello_test_ssl_stat.results[3].stat.mode == '0600'
+
+    - name: Read the server certificate
+      community.crypto.x509_certificate_info:
+        path: "{{ _katello_test_ssl_dir }}/foreman_cert.pem"
+      register: _katello_test_cert
+
+    - name: Read the CA certificate
+      community.crypto.x509_certificate_info:
+        path: "{{ _katello_test_ssl_dir }}/ca_cert_bundle.pem"
+      register: _katello_test_ca
+
+    - name: Assert the certificates follow the Katello requirements
+      ansible.builtin.assert:
+        that:
+          - _katello_test_cert.subject.commonName == 'katello.example.test'
+          - "'DNS:katello.example.test' in _katello_test_cert.subject_alt_name"
+          - "'DNS:katello-alias.example.test' in _katello_test_cert.subject_alt_name"
+          - "'CA:FALSE' in _katello_test_cert.basic_constraints"
+          - "'Key Encipherment' in _katello_test_cert.key_usage"
+          - "'TLS Web Server Authentication' in _katello_test_cert.extended_key_usage"
+          - "'TLS Web Client Authentication' in _katello_test_cert.extended_key_usage"
+          - _katello_test_cert.issuer.commonName == _katello_test_ca.subject.commonName
+          - "'CA:TRUE' in _katello_test_ca.basic_constraints"
+          - not _katello_test_cert.expired
+
+    - name: Verify the chain with openssl
+      ansible.builtin.command:
+        argv: [openssl, verify, -CAfile, "{{ _katello_test_ssl_dir }}/ca_cert_bundle.pem", "{{ _katello_test_ssl_dir }}/foreman_cert.pem"]
+      changed_when: false
+
+    - name: Read the generated files to reuse as supplied certificates
+      ansible.builtin.slurp:
+        src: "{{ _katello_test_ssl_dir }}/{{ item }}"
+      loop: [foreman_cert.pem, foreman_cert_key.pem, ca_cert_bundle.pem]
+      register: _katello_test_pem
+      no_log: true
+
+    - name: Accept them in custom mode
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: ssl.yml
+      vars:
+        katello_hostname: katello.example.test
+        katello_ssl_mode: custom
+        katello_ssl_dir: /root/foreman_cert_custom_test
+        katello_ssl_server_cert: "{{ _katello_test_pem.results[0].content | b64decode }}"
+        katello_ssl_server_key: "{{ _katello_test_pem.results[1].content | b64decode }}"
+        katello_ssl_ca_bundle: "{{ _katello_test_pem.results[2].content | b64decode }}"
+
+    - name: Generate an unrelated private key
+      community.crypto.openssl_privatekey:
+        path: /root/unrelated_key.pem
+        size: 2048
+
+    - name: Read the unrelated key
+      ansible.builtin.slurp:
+        src: /root/unrelated_key.pem
+      register: _katello_test_other_key
+      no_log: true
+
+    - name: Supply a certificate with the wrong key
+      block:
+        - name: Include the SSL tasks in custom mode
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: ssl.yml
+          vars:
+            katello_hostname: katello.example.test
+            katello_ssl_mode: custom
+            katello_ssl_dir: /root/foreman_cert_mismatch_test
+            katello_ssl_server_cert: "{{ _katello_test_pem.results[0].content | b64decode }}"
+            katello_ssl_server_key: "{{ _katello_test_other_key.content | b64decode }}"
+            katello_ssl_ca_bundle: "{{ _katello_test_pem.results[2].content | b64decode }}"
+
+        - name: Fail because the check passed
+          ansible.builtin.set_fact:
+            _katello_test_mismatch_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_mismatch_passed: false
+
+    - name: Assert a certificate with the wrong key is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_mismatch_passed
+
+    - name: Supply a certificate for another hostname
+      block:
+        - name: Include the SSL tasks in custom mode
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: ssl.yml
+          vars:
+            katello_hostname: other.example.test
+            katello_ssl_mode: custom
+            katello_ssl_dir: /root/foreman_cert_hostname_test
+            katello_ssl_server_cert: "{{ _katello_test_pem.results[0].content | b64decode }}"
+            katello_ssl_server_key: "{{ _katello_test_pem.results[1].content | b64decode }}"
+            katello_ssl_ca_bundle: "{{ _katello_test_pem.results[2].content | b64decode }}"
+
+        - name: Fail because the check passed
+          ansible.builtin.set_fact:
+            _katello_test_san_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_san_passed: false
+
+    - name: Assert a certificate without the hostname in its SANs is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_san_passed
+
+- name: Verify input validation
+  hosts: katello-alma9
+  gather_facts: true
+  tasks:
+    - name: Run the role with an empty admin password
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: true
+            katello_admin_password: ""
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_validation_passed: false
+
+    - name: Assert an empty admin password is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_validation_passed
+
+    - name: Run the role with an uppercase short hostname
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_hostname: KATELLO
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_hostname_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_hostname_validation_passed: false
+
+    - name: Assert a short or uppercase hostname is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_hostname_validation_passed
+
+    - name: Run the role with an incomplete LDAP auth source
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_ldap_auth_sources:
+              - name: Corp AD
+                server_type: active_directory
+                host: dc01.corp.example.com
+                account: svc-foreman@corp.example.com
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_ldap_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_ldap_validation_passed: false
+
+    - name: Assert an LDAP source without base_dn or bind password is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_ldap_validation_passed
+
+    - name: Accept a complete LDAP auth source
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: assert.yml
+      vars:
+        katello_run_installer: false
+        katello_ldap_auth_sources:
+          - name: Corp AD
+            server_type: active_directory
+            host: dc01.corp.example.com
+            account: svc-foreman@corp.example.com
+            account_password: not-a-real-password
+            base_dn: DC=corp,DC=example,DC=com
+            group_mappings:
+              - usergroup: Katello Admins
+                external_group: katello-admins
+                admin: true
+          - name: IPA
+            server_type: free_ipa
+            host: ipa.example.com
+            base_dn: dc=example,dc=com
+
+    - name: Run the role with a content credential that has two sources
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_content_credentials:
+              - name: RPM-GPG-KEY-AlmaLinux-9
+                url: https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-9
+                content: "-----BEGIN PGP PUBLIC KEY BLOCK-----"
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_credential_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_credential_validation_passed: false
+
+    - name: Assert a content credential with both url and content is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_credential_validation_passed
+
+    - name: Run the role with an unknown repository content type
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_products:
+              - name: Broken
+                repositories:
+                  - name: Broken repo
+                    content_type: rpm
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_repo_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_repo_validation_passed: false
+
+    - name: Assert an unknown repository content type is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_repo_validation_passed
+
+    - name: Accept a complete content configuration
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: assert.yml
+      vars:
+        katello_run_installer: false
+        katello_organizations:
+          - name: Engineering
+            label: engineering
+        katello_locations:
+          - name: Datacenter East
+            organizations: [Default Organization, Engineering]
+          - name: Rack 12
+            parent: Datacenter East
+        katello_content_credentials:
+          - name: RPM-GPG-KEY-AlmaLinux-9
+            url: https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-9
+          - name: Internal CA
+            content_type: cert
+            content: "-----BEGIN CERTIFICATE-----"
+          - name: Old key
+            state: absent
+        katello_products:
+          - name: AlmaLinux 9
+            gpg_key: RPM-GPG-KEY-AlmaLinux-9
+            repositories:
+              - name: AlmaLinux 9 BaseOS x86_64
+                url: https://repo.almalinux.org/almalinux/9/BaseOS/x86_64/os/
+              - name: Containers
+                content_type: docker
+                url: https://quay.io
+                docker_upstream_name: almalinuxorg/almalinux
+          - name: Empty product
+
+    - name: Run the role in custom SSL mode without a certificate
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_ssl_mode: custom
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_custom_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_custom_validation_passed: false
+
+    - name: Assert custom SSL mode without a certificate is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_custom_validation_passed
+
+    - name: Run the role as a proxy without a Katello server
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: true
+            katello_admin_password: changeme123
+            katello_deployment: proxy
+            katello_proxy_server: not-in-inventory
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_proxy_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_proxy_validation_passed: false
+
+    - name: Assert a proxy pointing at an unknown server is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_proxy_validation_passed
+
+    - name: Run the role with plugins and foremanctl
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_install_method: foremanctl
+            katello_foreman_plugins: [remote_execution]
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_plugin_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_plugin_validation_passed: false
+
+    - name: Assert installer plugin lists are rejected with foremanctl
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_plugin_validation_passed
+
+    - name: Accept a proxy pointing at the server in the inventory
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: assert.yml
+      vars:
+        katello_run_installer: true
+        katello_admin_password: changeme123
+        katello_deployment: proxy
+        katello_hostname: proxy.example.test
+        katello_proxy_server: katello-alma9
+        katello_foreman_proxy_plugins: [remote_execution_script, ansible]
+
+    - name: Run the role as a proxy with a tuning profile
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_deployment: proxy
+            katello_tuning: medium
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_tuning_validation_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_tuning_validation_passed: false
+
+    - name: Assert a tuning profile on a proxy is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_tuning_validation_passed
+
+    - name: Run the role with an unknown LDAP attribute key
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_ldap_auth_sources:
+              - name: Corp AD
+                server_type: active_directory
+                host: dc01.corp.example.com
+                base_dn: DC=corp,DC=example,DC=com
+                attributes:
+                  uid: sAMAccountName
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_ldap_attr_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_ldap_attr_passed: false
+
+    - name: Assert the role rejects an unknown LDAP attribute key
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_ldap_attr_passed
+
+    - name: Run the role with an internal user without a password
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_users:
+              - login: jdoe
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_user_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_user_passed: false
+
+    - name: Assert the role rejects an internal user without a password
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_user_passed
+
+    - name: Run the role with a user group that contains itself
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_usergroups:
+              - name: Operators
+                usergroups: [Operators]
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_group_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_group_passed: false
+
+    - name: Assert the role rejects a user group that contains itself
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_group_passed
+
+    - name: Accept complete users, groups and LDAP mappings
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: assert.yml
+      vars:
+        katello_run_installer: false
+        katello_ldap_auth_sources:
+          - name: Corp AD
+            server_type: active_directory
+            host: dc01.corp.example.com
+            base_dn: DC=corp,DC=example,DC=com
+            attributes:
+              login: userPrincipalName
+              photo: thumbnailPhoto
+            organizations: all
+            locations: [Default Location]
+        katello_users:
+          - login: jdoe
+            password: not-a-real-password
+            roles: [Viewer]
+          - login: ldap.user
+            auth_source: Corp AD
+        katello_usergroups:
+          - name: Operators
+            usergroups: [Helpdesk]
+            roles: [Viewer]
+            external_groups:
+              - name: katello-operators
+                auth_source: Corp AD
+          - name: Helpdesk
+            users: [jdoe]
+
+    - name: Run the role with two manifests for one organization
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_subscription_manifests:
+              - file: files/manifest-a.zip
+              - organization: Default Organization
+                file: files/manifest-b.zip
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_manifest_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_manifest_passed: false
+
+    - name: Assert the role rejects two manifests for one organization
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_manifest_passed
+
+    - name: Run the role with a Red Hat repository set without repositories
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_redhat_repositories:
+              - label: rhel-9-for-x86_64-baseos-rpms
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_rhrepo_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_rhrepo_passed: false
+
+    - name: Assert the role rejects a Red Hat repository set without repositories
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_rhrepo_passed
+
+    - name: Accept complete manifests and Red Hat repositories
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: assert.yml
+      vars:
+        katello_run_installer: false
+        katello_subscription_manifests:
+          - file: files/manifest.zip
+            repository_url: https://cdn.redhat.com
+          - organization: Lab
+            file: /root/manifest_lab.zip
+            remote_src: true
+          - organization: Old
+            state: absent
+        katello_redhat_repositories:
+          - label: rhel-9-for-x86_64-baseos-rpms
+            repositories:
+              - releasever: "9"
+          - name: Red Hat Enterprise Linux 9 for x86_64 - AppStream (RPMs)
+            product: Red Hat Enterprise Linux for x86_64
+            repositories:
+              - releasever: "9"
+                basearch: x86_64
+            sync: true
+          - label: satellite-client-6-for-rhel-9-x86_64-rpms
+            all_repositories: true
+            state: disabled

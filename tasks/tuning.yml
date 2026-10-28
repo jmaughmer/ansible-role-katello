@@ -1,0 +1,43 @@
+---
+- name: Pick the tuning profile for the expected number of hosts
+  ansible.builtin.set_fact:
+    _katello_tuning_profile: >-
+      {{ _katello_tuning_profile_order
+         | select('in', _katello_tuning_profiles | dict2items
+                        | selectattr('value.hosts', '>=', katello_managed_hosts | int)
+                        | map(attribute='key') | list)
+         | first }}
+  when:
+    - katello_tuning == 'auto'
+    - katello_managed_hosts | int > 0
+
+# If the hardware is below even the default profile, use default and let the
+# pre-flight checks report it.
+- name: Pick the largest tuning profile the hardware supports
+  ansible.builtin.set_fact:
+    _katello_tuning_profile: "{{ (_katello_fitting | last) if _katello_fitting | length > 0 else 'default' }}"
+  vars:
+    _katello_cpus: "{{ ansible_facts['processor_vcpus'] | default(ansible_facts['processor_count']) | int }}"
+    _katello_ram_gb: "{{ (ansible_facts['memtotal_mb'] / 1024 / 0.95) | int }}"
+    _katello_fitting: >-
+      {{ _katello_tuning_profile_order
+         | select('in', _katello_tuning_profiles | dict2items
+                        | selectattr('value.cpus', '<=', _katello_cpus | int)
+                        | selectattr('value.ram_gb', '<=', _katello_ram_gb | int)
+                        | map(attribute='key') | list)
+         | list }}
+  when:
+    - katello_tuning == 'auto'
+    - katello_managed_hosts | int == 0
+
+- name: Use the requested tuning profile
+  ansible.builtin.set_fact:
+    _katello_tuning_profile: "{{ katello_tuning }}"
+  when: katello_tuning != 'auto'
+
+- name: Show the tuning profile
+  ansible.builtin.debug:
+    msg: >-
+      Tuning profile: {{ _katello_tuning_profile | default('', true) or 'installer default' }}
+      (needs {{ katello_min_memory_mb }} MB RAM and {{ katello_min_cpus }} CPU cores).
+  when: katello_deployment == 'server'

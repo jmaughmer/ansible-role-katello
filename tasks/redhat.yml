@@ -1,0 +1,101 @@
+---
+# The manifest module reads the zip on the host it runs on, which is the
+# Katello server, so a manifest from the controller is copied there first.
+- name: Create the manifest directory
+  ansible.builtin.file:
+    path: "{{ _katello_manifest_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  when: katello_subscription_manifests | map(attribute='remote_src', default=false) | map('bool') | reject | list | length > 0
+
+- name: Copy subscription manifests to the Katello server
+  ansible.builtin.copy:
+    src: "{{ item.file }}"
+    dest: "{{ _katello_manifest_dir }}/{{ item.organization | default(katello_initial_organization) | regex_replace('[^A-Za-z0-9_.-]', '_') }}.zip"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ katello_subscription_manifests }}"
+  loop_control:
+    label: "{{ item.organization | default(katello_initial_organization) }}: {{ item.file | default(item.state) }}"
+  when:
+    - item.state | default('present') == 'present'
+    - not item.remote_src | default(false) | bool
+
+- name: Configure Red Hat content through the Foreman API
+  module_defaults:
+    group/theforeman.foreman.foreman:
+      server_url: "https://{{ katello_hostname }}"
+      username: "{{ katello_admin_username }}"
+      password: "{{ katello_admin_password }}"
+      validate_certs: "{{ katello_verify_validate_certs | bool }}"
+  block:
+    # Uploading a manifest that is already there reports no change.
+    - name: Manage subscription manifests
+      theforeman.foreman.subscription_manifest:
+        organization: "{{ item.organization | default(katello_initial_organization) }}"
+        manifest_path: >-
+          {{ (item.file if item.remote_src | default(false) | bool
+              else _katello_manifest_dir ~ '/' ~ (item.organization | default(katello_initial_organization)
+                                                 | regex_replace('[^A-Za-z0-9_.-]', '_')) ~ '.zip')
+             if item.state | default('present') == 'present' else omit }}
+        repository_url: "{{ item.repository_url | default(omit) }}"
+        state: "{{ item.state | default('present') }}"
+      loop: "{{ katello_subscription_manifests }}"
+      loop_control:
+        label: "{{ item.organization | default(katello_initial_organization) }}: {{ item.state | default('present') }}"
+
+    - name: Enable Red Hat repositories
+      theforeman.foreman.repository_set:
+        organization: "{{ item.organization | default(katello_initial_organization) }}"
+        label: "{{ item.label | default(omit) }}"
+        name: "{{ item.name | default(omit) }}"
+        product: "{{ item.product | default(omit) }}"
+        repositories: "{{ item.repositories | default(omit) }}"
+        all_repositories: "{{ item.all_repositories | default(omit) }}"
+        state: "{{ item.state | default('enabled') }}"
+      loop: "{{ katello_redhat_repositories }}"
+      loop_control:
+        label: "{{ item.organization | default(katello_initial_organization) }}: {{ item.label | default(item.name) }}"
+
+    # Enabled repositories get generated names (for example "Red Hat
+    # Enterprise Linux 9 for x86_64 - BaseOS RPMs 9"), so look them up from
+    # the repository set before syncing.
+    - name: Look up the repository sets to sync
+      theforeman.foreman.resource_info:
+        resource: repository_sets
+        organization: "{{ item.organization | default(katello_initial_organization) }}"
+        search: >-
+          {{ 'label="' ~ item.label ~ '"' if item.label is defined
+             else 'name="' ~ item.name ~ '"' ~ (' and product_name="' ~ item.product ~ '"' if item.product is defined else '') }}
+        full_details: true
+      loop: "{{ katello_redhat_repositories }}"
+      loop_control:
+        label: "{{ item.organization | default(katello_initial_organization) }}: {{ item.label | default(item.name) }}"
+      register: _katello_redhat_sets
+      when:
+        - item.sync | default(katello_sync_repositories) | bool
+        - item.state | default('enabled') == 'enabled'
+
+    - name: Sync Red Hat repositories
+      theforeman.foreman.repository_sync:
+        organization: "{{ item.organization }}"
+        product: "{{ item.product }}"
+        repository: "{{ item.repository }}"
+      loop: >-
+        {%- set ns = namespace(repos=[]) -%}
+        {%- for result in _katello_redhat_sets.results | selectattr('resources', 'defined') -%}
+          {%- for rset in result.resources -%}
+            {%- for repo in rset.repositories | default([]) -%}
+              {%- set ns.repos = ns.repos + [{
+                    'organization': result.item.organization | default(katello_initial_organization),
+                    'product': rset.product.name,
+                    'repository': repo.name}] -%}
+            {%- endfor -%}
+          {%- endfor -%}
+        {%- endfor -%}
+        {{ ns.repos }}
+      loop_control:
+        label: "{{ item.product }}: {{ item.repository }}"

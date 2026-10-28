@@ -1,0 +1,12 @@
+---
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install tools the role and its facts rely on
+      ansible.builtin.dnf:
+        name:
+          - hostname
+          - iproute
+          - procps-ng
+        state: present

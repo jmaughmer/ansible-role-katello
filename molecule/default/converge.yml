@@ -1,0 +1,7 @@
+---
+- name: Converge
+  hosts: all
+  tasks:
+    - name: Include the katello role
+      ansible.builtin.include_role:
+        name: ansible-role-katello
