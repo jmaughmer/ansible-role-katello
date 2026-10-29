@@ -38,9 +38,9 @@ role defaults to `foremanctl` and rejects `installer`.
 
 The installer runs once. The role stores a fingerprint of the installer
 arguments (plus certificate and `custom-hiera.yaml` checksums) in `/var/lib/ansible-katello/install.sha256` and re-runs only when
-those arguments change (or `katello_force_install: true`). Changing only the
-admin password does not re-run it, because the `--initial-admin-*` options
-only apply to a new database.
+those arguments change (or `katello_force_install: true`). Changing the
+initial organization, location, admin username or admin password does not
+re-run it, because the `--initial-*` options only apply to a new database.
 
 ## Usage
 
@@ -391,6 +391,11 @@ katello_ldap_auth_sources:
   that does not see the host trust store, so set `cacert` there.
 - New LDAP users are created on first login (`onthefly_register`) and group
   membership is synced (`usergroup_sync`). Both default to `true`.
+- Bind password: Foreman never returns it, so the role sends
+  `account_password` only when it creates the source
+  (`katello_ldap_account_password_update: on_create`). Set it, or a source's
+  `account_password_update`, to `always` to send it on every run, for example
+  after you rotate the password (that run then always reports a change).
 - Organizations and locations: a list of names (nested locations by title,
   such as `Datacenter East/Rack 12`), or `all` for every one on the server at
   the time of the run. The default is the initial organization and location.

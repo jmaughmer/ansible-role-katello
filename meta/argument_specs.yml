@@ -287,6 +287,11 @@ argument_specs:
         elements: dict
         default: []
         description: LDAP / Active Directory auth sources and group mappings. See defaults/main.yml.
+      katello_ldap_account_password_update:
+        type: str
+        default: on_create
+        choices: [on_create, always]
+        description: When to send LDAP bind passwords to Foreman.
       katello_users:
         type: list
         elements: dict

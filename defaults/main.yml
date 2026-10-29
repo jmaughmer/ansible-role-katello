@@ -192,8 +192,8 @@ katello_verify_delay: 10
 # account_password, groups_base, ldap_filter, ldap_group_membership,
 # attr_login/attr_firstname/attr_lastname/attr_mail/attr_photo (defaults
 # depend on server_type), onthefly_register (true), usergroup_sync (true),
-# organizations/locations (the initial ones), state (present/absent) and
-# group_mappings, a list of:
+# organizations/locations (the initial ones), account_password_update,
+# state (present/absent) and group_mappings, a list of:
 #   usergroup: Foreman user group to create
 #   external_group: LDAP group name (defaults to usergroup)
 #   admin: true/false
@@ -225,6 +225,10 @@ katello_verify_delay: 10
 #         external_group: katello-viewers
 #         roles: [Viewer]
 katello_ldap_auth_sources: []
+# The API cannot tell whether a bind password changed, so by default it is
+# only set when an LDAP source is created. "always" sets it on every run (a
+# source's own account_password_update overrides this).
+katello_ldap_account_password_update: on_create
 # Internal (local) users. Required: login, and password for a new internal
 # user. Optional: firstname, lastname, mail, description, admin (false),
 # roles, organizations/locations (the initial ones), default_organization,

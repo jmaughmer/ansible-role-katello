@@ -1,7 +1,7 @@
 ---
-# The admin password is kept out of _katello_install_args so it is not part
-# of the fingerprint. The --initial-admin-* options only affect a new
-# database, so changing them later should not re-run the installer.
+# The --initial-* options and the admin password only affect a new database,
+# so they are kept out of _katello_install_args and the fingerprint: changing
+# them later does not re-run the installer.
 - name: Build the plugin and certificate arguments
   ansible.builtin.set_fact:
     _katello_plugin_args: >-
@@ -31,15 +31,19 @@
 - name: Build the foreman-installer arguments for a server
   ansible.builtin.set_fact:
     _katello_install_args: >-
-      {{ ['foreman-installer', '--scenario', 'katello',
-          '--foreman-initial-organization', katello_initial_organization,
-          '--foreman-initial-location', katello_initial_location,
-          '--foreman-initial-admin-username', katello_admin_username]
+      {{ ['foreman-installer', '--scenario', 'katello']
          + _katello_ssl_installer_args
          + _katello_plugin_args
          + (['--tuning', _katello_tuning_profile] if _katello_tuning_profile | default('', true) | length > 0 else [])
          + _katello_tuning_installer_args
          + katello_installer_extra_args }}
+    _katello_install_initial_args:
+      - --foreman-initial-organization
+      - "{{ katello_initial_organization }}"
+      - --foreman-initial-location
+      - "{{ katello_initial_location }}"
+      - --foreman-initial-admin-username
+      - "{{ katello_admin_username }}"
     _katello_install_secret_args:
       - --foreman-initial-admin-password
       - "{{ katello_admin_password }}"
@@ -50,15 +54,19 @@
 - name: Build the foremanctl arguments for a server
   ansible.builtin.set_fact:
     _katello_install_args: >-
-      {{ ['foremanctl', 'deploy',
-          '--initial-organization', katello_initial_organization,
-          '--initial-location', katello_initial_location,
-          '--initial-admin-username', katello_admin_username]
+      {{ ['foremanctl', 'deploy']
          + _katello_ssl_foremanctl_args
          + (katello_foremanctl_features | map('regex_replace', '^', '--add-feature=') | list)
          + (katello_foremanctl_server_aliases | map('regex_replace', '^', '--server-alias=') | list)
          + (['--tuning', _katello_tuning_profile] if _katello_tuning_profile | default('', true) | length > 0 else [])
          + katello_foremanctl_extra_args }}
+    _katello_install_initial_args:
+      - --initial-organization
+      - "{{ katello_initial_organization }}"
+      - --initial-location
+      - "{{ katello_initial_location }}"
+      - --initial-admin-username
+      - "{{ katello_admin_username }}"
     _katello_install_secret_args:
       - --initial-admin-password
       - "{{ katello_admin_password }}"
@@ -76,6 +84,7 @@
           '--foreman-proxy-trusted-hosts', _katello_proxy_fqdn]
          + (katello_foreman_proxy_plugins | map('replace', '_', '-') | map('regex_replace', '^', '--enable-foreman-proxy-plugin-') | list)
          + katello_installer_extra_args }}
+    _katello_install_initial_args: []
     _katello_install_secret_args:
       - --foreman-proxy-oauth-consumer-key
       - "{{ _katello_proxy_oauth_key }}"
@@ -94,6 +103,7 @@
           '--foreman-fqdn', katello_proxy_server_fqdn]
          + (katello_foremanctl_features | map('regex_replace', '^', '--add-feature=') | list)
          + katello_foremanctl_extra_args }}
+    _katello_install_initial_args: []
     _katello_install_secret_args: []
   when:
     - katello_deployment == 'proxy'
@@ -136,7 +146,7 @@
 
 - name: Run {{ katello_install_method }}
   ansible.builtin.command:
-    argv: "{{ _katello_install_args + _katello_install_secret_args + _katello_install_runtime_args }}"
+    argv: "{{ _katello_install_args + _katello_install_initial_args + _katello_install_secret_args + _katello_install_runtime_args }}"
   environment:
     LANG: en_US.UTF-8
     LC_ALL: en_US.UTF-8
