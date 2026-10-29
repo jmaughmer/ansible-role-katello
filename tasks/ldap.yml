@@ -45,6 +45,25 @@
     label: "{{ item.name }}"
   no_log: true
 
+# Later loops use this copy, so the bind password is not in their results.
+- name: Copy the LDAP auth source list without bind passwords
+  ansible.builtin.set_fact:
+    _katello_ldap_sources_public: >-
+      {{ _katello_ldap_sources | map('dict2items')
+         | map('rejectattr', 'key', 'equalto', 'account_password')
+         | map('items2dict') | list }}
+  no_log: true
+
+- name: Look up existing LDAP auth sources
+  ansible.builtin.uri:
+    url: "https://{{ katello_hostname }}/api/v2/auth_source_ldaps?per_page=all"
+    user: "{{ katello_admin_username }}"
+    password: "{{ katello_admin_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ katello_verify_validate_certs | bool }}"
+  register: _katello_existing_ldaps
+  no_log: true
+
 - name: Configure LDAP authentication through the Foreman API
   module_defaults:
     group/theforeman.foreman.foreman:
@@ -53,6 +72,8 @@
       password: "{{ katello_admin_password }}"
       validate_certs: "{{ katello_verify_validate_certs | bool }}"
   block:
+    # The Foreman API never returns the bind password, so sending it always
+    # reports a change. By default it is only sent when the source is created.
     - name: Create LDAP auth sources
       theforeman.foreman.auth_source_ldap:
         name: "{{ item.name }}"
@@ -62,7 +83,12 @@
         tls: "{{ item.tls }}"
         cacert: "{{ item.cacert | default(omit) }}"
         account: "{{ item.account | default(omit) }}"
-        account_password: "{{ item.account_password | default(omit) }}"
+        account_password: >-
+          {{ item.account_password
+             if (item.account_password is defined
+                 and (item.name not in _katello_existing_ldap_names
+                      or item.account_password_update | default(katello_ldap_account_password_update) == 'always'))
+             else omit }}
         base_dn: "{{ item.base_dn }}"
         groups_base: "{{ item.groups_base | default(omit) }}"
         ldap_filter: "{{ item.ldap_filter | default(omit) }}"
@@ -77,6 +103,8 @@
         organizations: "{{ item.organizations }}"
         locations: "{{ item.locations }}"
         state: "{{ item.state }}"
+      vars:
+        _katello_existing_ldap_names: "{{ _katello_existing_ldaps.json.results | map(attribute='name') | list }}"
       loop: "{{ _katello_ldap_sources }}"
       loop_control:
         label: "{{ item.name }}"
@@ -88,7 +116,7 @@
         admin: "{{ item.1.admin | default(omit) }}"
         roles: "{{ item.1.roles | default(omit) }}"
         state: present
-      loop: "{{ _katello_ldap_sources | rejectattr('state', 'equalto', 'absent') | subelements('group_mappings', skip_missing=true) }}"
+      loop: "{{ _katello_ldap_sources_public | rejectattr('state', 'equalto', 'absent') | subelements('group_mappings', skip_missing=true) }}"
       loop_control:
         label: "{{ item.1.usergroup }}"
 
@@ -98,7 +126,7 @@
         usergroup: "{{ item.1.usergroup }}"
         auth_source: "{{ item.0.name }}"
         state: present
-      loop: "{{ _katello_ldap_sources | rejectattr('state', 'equalto', 'absent') | subelements('group_mappings', skip_missing=true) }}"
+      loop: "{{ _katello_ldap_sources_public | rejectattr('state', 'equalto', 'absent') | subelements('group_mappings', skip_missing=true) }}"
       loop_control:
         label: "{{ item.0.name }}: {{ item.1.external_group | default(item.1.usergroup) }} -> {{ item.1.usergroup }}"
 
@@ -107,7 +135,7 @@
   block:
     - name: Look up LDAP auth source IDs
       ansible.builtin.uri:
-        url: "https://{{ katello_hostname }}/api/v2/auth_source_ldaps?per_page=1000"
+        url: "https://{{ katello_hostname }}/api/v2/auth_source_ldaps?per_page=all"
         user: "{{ katello_admin_username }}"
         password: "{{ katello_admin_password }}"
         force_basic_auth: true
@@ -129,6 +157,6 @@
       failed_when: >-
         _katello_ldap_test.status != 200
         or not (_katello_ldap_test.json.success | default(false))
-      loop: "{{ _katello_ldap_sources | rejectattr('state', 'equalto', 'absent') }}"
+      loop: "{{ _katello_ldap_sources_public | rejectattr('state', 'equalto', 'absent') }}"
       loop_control:
         label: "{{ item.name }}"

@@ -363,6 +363,7 @@
             host: dc01.corp.example.com
             account: svc-foreman@corp.example.com
             account_password: not-a-real-password
+            account_password_update: always
             base_dn: DC=corp,DC=example,DC=com
             group_mappings:
               - usergroup: Katello Admins
@@ -372,6 +373,40 @@
             server_type: free_ipa
             host: ipa.example.com
             base_dn: dc=example,dc=com
+
+    - name: Run the role with an unknown LDAP bind password policy
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_run_installer: false
+            katello_ldap_auth_sources:
+              - name: Corp AD
+                server_type: active_directory
+                host: dc01.corp.example.com
+                account: svc-foreman@corp.example.com
+                account_password: not-a-real-password
+                account_password_update: sometimes
+                base_dn: DC=corp,DC=example,DC=com
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_ldap_policy_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_ldap_policy_passed: false
+            # A looped assert reports per item, so check which assertion failed.
+            _katello_test_ldap_policy_failures: >-
+              {{ ansible_failed_result.results | selectattr('failed') | map(attribute='assertion') | list }}
+
+    - name: Assert an unknown account_password_update is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_ldap_policy_passed
+          - _katello_test_ldap_policy_failures | select('search', 'account_password_update') | list | length == 1
 
     - name: Run the role with a content credential that has two sources
       block:
