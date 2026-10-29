@@ -1,9 +1,9 @@
 ---
-# Fast scenario: prepares two AlmaLinux systemd containers (Podman), a Katello
-# server (with a role-generated self-signed certificate) and a smart proxy,
-# without running the installer, which needs a full VM with 20 GB RAM. Use
-# the "full" and "proxy" scenarios for real installs. MOLECULE_IMAGE picks
-# the image, for example docker.io/almalinux/10-init.
+# Fast scenario for EL9 and the RPM installer: prepares two systemd
+# containers (Podman), a Katello server (with a role-generated self-signed
+# certificate) and a smart proxy, without running the installer, which needs a
+# full VM with 20 GB RAM. Use the "full" and "proxy" scenarios for real
+# installs. MOLECULE_IMAGE picks another EL9 image.
 dependency:
   name: galaxy
   options:

@@ -4,6 +4,8 @@
   gather_facts: true
   vars:
     _katello_test_url: "https://{{ katello_hostname | default(ansible_facts['fqdn']) }}"
+    # The role installs EL9 with foreman-installer and EL10 with foremanctl.
+    _katello_test_installer: "{{ ansible_facts['distribution_major_version'] == '9' }}"
   tasks:
     - name: Ping the API
       ansible.builtin.uri:
@@ -207,14 +209,14 @@
       ansible.builtin.slurp:
         src: /etc/systemd/system/foreman.service.d/installer.conf
       register: _katello_test_puma
-      when: katello_install_method == 'installer'
+      when: _katello_test_installer | bool
 
     - name: Count the Dynflow workers
       ansible.builtin.shell:
         cmd: set -o pipefail && systemctl list-units --all --plain --no-legend 'dynflow-sidekiq@worker-*' | wc -l
       register: _katello_test_dynflow
       changed_when: false
-      when: katello_install_method == 'installer'
+      when: _katello_test_installer | bool
 
     - name: Assert the recommended Puma threads and Dynflow workers are applied
       ansible.builtin.assert:
@@ -222,7 +224,7 @@
           - (_katello_test_puma.content | b64decode) is search('FOREMAN_PUMA_THREADS_MAX=16')
           - _katello_test_dynflow.stdout | int == 3
         fail_msg: "{{ _katello_test_puma.content | b64decode }}"
-      when: katello_install_method == 'installer'
+      when: _katello_test_installer | bool
 
     - name: Find the internal user
       ansible.builtin.uri:

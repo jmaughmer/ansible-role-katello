@@ -20,8 +20,8 @@ argument_specs:
         type: str
         choices: [installer, foremanctl]
         description: >-
-          RPM-based foreman-installer (EL9 only), or containerized foremanctl (EL9 and EL10).
-          Defaults to installer on EL9 and foremanctl on EL10.
+          RPM-based foreman-installer on EL9, or containerized foremanctl on EL10. Each EL
+          version supports only its own method, which is the default.
       katello_initial_organization:
         type: str
         default: Default Organization
@@ -127,7 +127,7 @@ argument_specs:
         type: str
         default: ""
         choices: ["", auto, default, medium, large, extra-large, extra-extra-large]
-        description: Tuning profile passed with --tuning, or auto to pick one.
+        description: Tuning profile passed with --tuning ("" means default), or auto to pick one.
       katello_managed_hosts:
         type: int
         default: 0
@@ -172,12 +172,16 @@ argument_specs:
         type: list
         elements: str
         default: []
-        description: Features passed to foremanctl deploy with --add-feature.
+        description: >-
+          Features passed to foremanctl with --add-feature (underscores become hyphens).
+          Features foremanctl remembers that are not listed are removed.
       katello_foremanctl_server_aliases:
         type: list
         elements: str
         default: []
-        description: Extra hostnames passed to foremanctl deploy with --server-alias.
+        description: >-
+          Extra hostnames passed to foremanctl deploy with --server-alias. Aliases
+          foremanctl remembers that are not listed are removed.
       katello_foremanctl_extra_args:
         type: list
         elements: str

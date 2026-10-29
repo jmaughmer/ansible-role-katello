@@ -1,0 +1,190 @@
+---
+# Builds the install command and its fingerprint without changing the host,
+# so the Molecule scenarios can check the arguments.
+#
+# The --initial-* options and the admin password only affect a new database,
+# so they are kept out of _katello_install_args and the fingerprint: changing
+# them later does not re-run the installer.
+- name: Build the plugin and certificate arguments
+  ansible.builtin.set_fact:
+    _katello_plugin_args: >-
+      {{ (katello_foreman_plugins | map('replace', '_', '-') | map('regex_replace', '^', '--enable-foreman-plugin-') | list)
+         + (katello_foreman_proxy_plugins | map('replace', '_', '-') | map('regex_replace', '^', '--enable-foreman-proxy-plugin-') | list)
+         + (katello_foreman_cli_plugins | map('replace', '_', '-') | map('regex_replace', '^', '--enable-foreman-cli-') | list) }}
+    _katello_ssl_installer_args: >-
+      {{ [] if katello_ssl_mode == 'default' else
+         ['--certs-server-cert', _katello_ssl_files.cert,
+          '--certs-server-key', _katello_ssl_files.key,
+          '--certs-server-ca-cert', _katello_ssl_files.ca] }}
+    _katello_ssl_foremanctl_args: >-
+      {{ ['--certificate-source', 'default'] if katello_ssl_mode == 'default' else
+         ['--certificate-source', 'custom_server',
+          '--certificate-server-certificate', _katello_ssl_files.cert,
+          '--certificate-server-key', _katello_ssl_files.key,
+          '--certificate-server-ca-certificate', _katello_ssl_files.ca] }}
+
+    # Always passed: both installers remember the last profile.
+    _katello_tuning_args: ['--tuning', "{{ _katello_tuning_profile | default('', true) or 'default' }}"]
+    _katello_foremanctl_features: "{{ katello_foremanctl_features | map('replace', '_', '-') | unique | list }}"
+
+    _katello_tuning_installer_args: >-
+      {{ (['--foreman-foreman-service-puma-threads-max', katello_tuning_puma_threads | string]
+          if katello_tuning_puma_threads | int > 0 else [])
+         + (['--foreman-foreman-service-puma-workers', katello_tuning_puma_workers | string]
+            if katello_tuning_puma_workers | int > 0 else [])
+         + (['--foreman-dynflow-worker-instances', katello_tuning_dynflow_workers | string]
+            if katello_tuning_dynflow_workers | int > 0 else []) }}
+
+- name: Build the foreman-installer arguments for a server
+  ansible.builtin.set_fact:
+    _katello_install_args: >-
+      {{ ['foreman-installer', '--scenario', 'katello']
+         + _katello_ssl_installer_args
+         + _katello_plugin_args
+         + _katello_tuning_args
+         + _katello_tuning_installer_args
+         + katello_installer_extra_args }}
+    _katello_install_initial_args:
+      - --foreman-initial-organization
+      - "{{ katello_initial_organization }}"
+      - --foreman-initial-location
+      - "{{ katello_initial_location }}"
+      - --foreman-initial-admin-username
+      - "{{ katello_admin_username }}"
+    _katello_install_secret_args:
+      - --foreman-initial-admin-password
+      - "{{ katello_admin_password }}"
+  when:
+    - katello_deployment == 'server'
+    - katello_install_method == 'installer'
+
+- name: Build the foremanctl arguments for a server
+  ansible.builtin.set_fact:
+    _katello_install_args: >-
+      {{ ['foremanctl', 'deploy']
+         + _katello_ssl_foremanctl_args
+         + (_katello_foremanctl_features | map('regex_replace', '^', '--add-feature=') | list)
+         + (katello_foremanctl_server_aliases | map('regex_replace', '^', '--server-alias=') | list)
+         + _katello_tuning_args
+         + katello_foremanctl_extra_args }}
+    _katello_install_initial_args:
+      - --initial-organization
+      - "{{ katello_initial_organization }}"
+      - --initial-location
+      - "{{ katello_initial_location }}"
+      - --initial-admin-username
+      - "{{ katello_admin_username }}"
+    _katello_install_secret_args:
+      - --initial-admin-password
+      - "{{ katello_admin_password }}"
+  when:
+    - katello_deployment == 'server'
+    - katello_install_method == 'foremanctl'
+
+- name: Build the foreman-installer arguments for a smart proxy
+  ansible.builtin.set_fact:
+    _katello_install_args: >-
+      {{ ['foreman-installer', '--scenario', 'foreman-proxy-content',
+          '--certs-tar-file', _katello_proxy_bundle_path,
+          '--foreman-proxy-foreman-base-url', 'https://' ~ katello_proxy_server_fqdn,
+          '--foreman-proxy-trusted-hosts', katello_proxy_server_fqdn,
+          '--foreman-proxy-trusted-hosts', _katello_proxy_fqdn]
+         + (katello_foreman_proxy_plugins | map('replace', '_', '-') | map('regex_replace', '^', '--enable-foreman-proxy-plugin-') | list)
+         + katello_installer_extra_args }}
+    _katello_install_initial_args: []
+    _katello_install_secret_args:
+      - --foreman-proxy-oauth-consumer-key
+      - "{{ _katello_proxy_oauth_key }}"
+      - --foreman-proxy-oauth-consumer-secret
+      - "{{ _katello_proxy_oauth_secret }}"
+  when:
+    - katello_deployment == 'proxy'
+    - katello_install_method == 'installer'
+
+- name: Build the foremanctl arguments for a smart proxy
+  ansible.builtin.set_fact:
+    _katello_install_args: >-
+      {{ ['foremanctl', 'deploy-proxy',
+          '--flavor', 'foreman-proxy-content',
+          '--auth-bundle', _katello_proxy_bundle_path,
+          '--foreman-fqdn', katello_proxy_server_fqdn]
+         + (_katello_foremanctl_features | map('regex_replace', '^', '--add-feature=') | list)
+         + katello_foremanctl_extra_args }}
+    _katello_install_initial_args: []
+    _katello_install_secret_args: []
+  when:
+    - katello_deployment == 'proxy'
+    - katello_install_method == 'foremanctl'
+
+- name: Read the installed version of {{ _katello_installer_package[katello_deployment][katello_install_method] }}
+  ansible.builtin.command:
+    argv:
+      - rpm
+      - --query
+      - --queryformat
+      - "%{VERSION}-%{RELEASE}"
+      - "{{ _katello_installer_package[katello_deployment][katello_install_method] }}"
+  register: _katello_installer_version
+  changed_when: false
+  failed_when: false
+
+- name: Read the parameters foremanctl kept from its last run
+  ansible.builtin.slurp:
+    src: "{{ _katello_foremanctl_params_file }}"
+  register: _katello_foremanctl_params
+  failed_when: false
+  # The file holds the initial admin password.
+  no_log: true
+  when: katello_install_method == 'foremanctl'
+
+# foremanctl adds --add-feature and --server-alias values to the ones it kept,
+# so the ones that are no longer listed must be removed.
+- name: Find the foremanctl features and server aliases that are no longer listed
+  ansible.builtin.set_fact:
+    _katello_foremanctl_stale_features: "{{ _katello_kept.features | default([]) | reject('in', _katello_foremanctl_features) | list }}"
+    _katello_foremanctl_kept_aliases: "{{ _katello_kept.server_aliases | default([]) | select('in', _katello_wanted_aliases) | list }}"
+    _katello_foremanctl_stale_aliases: "{{ _katello_kept.server_aliases | default([]) | reject('in', _katello_wanted_aliases) | list }}"
+  vars:
+    _katello_kept: >-
+      {{ ((_katello_foremanctl_params.content | b64decode | from_yaml) or {})
+         if _katello_foremanctl_params.content is defined else {} }}
+    # The role only passes aliases to a server.
+    _katello_wanted_aliases: >-
+      {{ katello_foremanctl_server_aliases if katello_deployment == 'server'
+         else _katello_kept.server_aliases | default([]) }}
+  when: katello_install_method == 'foremanctl'
+
+# Certificate, bundle and custom-hiera.yaml checksums and the installer
+# package version are part of the fingerprint, so changing them (or upgrading
+# the installer package) re-runs the installer.
+- name: Compute the install fingerprint
+  ansible.builtin.set_fact:
+    _katello_install_fingerprint: >-
+      {{ ([katello_version, katello_foreman_version, katello_deployment,
+           _katello_installer_version.stdout if _katello_installer_version.rc == 0 else '']
+          + _katello_install_args
+          + (_katello_ssl_checksums | default([]))
+          + [_katello_custom_hiera_checksum | default('')]
+          + [_katello_proxy_bundle_checksum | default('')]) | to_json | hash('sha256') }}
+
+- name: Read the fingerprint of the last install
+  ansible.builtin.slurp:
+    src: "{{ _katello_state_file }}"
+  register: _katello_last_install
+  failed_when: false
+
+# Replacing the certificate of an installed server needs the update flags, and
+# removing foremanctl features needs --remove-feature. They are not part of the
+# fingerprint, which would change after the run that applied them.
+- name: Add the flags that only apply to this run
+  ansible.builtin.set_fact:
+    _katello_install_runtime_args: >-
+      {{ (['--certs-update-server', '--certs-update-server-ca']
+          if (katello_deployment == 'server' and katello_install_method == 'installer'
+              and katello_ssl_mode != 'default' and _katello_last_install.content is defined)
+          else [])
+         + ((_katello_foremanctl_stale_features | map('regex_replace', '^', '--remove-feature=') | list)
+            if katello_install_method == 'foremanctl' else []) }}
+    _katello_install_needed: >-
+      {{ katello_force_install | bool
+         or (_katello_last_install.content | default('') | b64decode | trim) != _katello_install_fingerprint }}

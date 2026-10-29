@@ -2,6 +2,13 @@
 - name: Validate role input and platform
   ansible.builtin.import_tasks: assert.yml
 
+# A dynamic include for the same reason as proxy_bundle.yml below.
+- name: Check that the smart proxy fits its Katello server
+  ansible.builtin.include_tasks: proxy_checks.yml
+  when:
+    - katello_deployment == 'proxy'
+    - katello_run_installer | bool
+
 - name: Select the tuning profile
   ansible.builtin.import_tasks: tuning.yml
 

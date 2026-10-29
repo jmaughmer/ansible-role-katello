@@ -17,12 +17,12 @@
   ansible.builtin.set_fact:
     _katello_tuning_profile: "{{ (_katello_fitting | last) if _katello_fitting | length > 0 else 'default' }}"
   vars:
-    _katello_cpus: "{{ ansible_facts['processor_vcpus'] | default(ansible_facts['processor_count']) | int }}"
-    _katello_ram_gb: "{{ (ansible_facts['memtotal_mb'] / 1024 / 0.95) | int }}"
+    # memtotal_mb is a little below the installed RAM, so allow 5%.
+    _katello_ram_gb: "{{ (_katello_host_memory_mb | int / 1024 / 0.95) | int }}"
     _katello_fitting: >-
       {{ _katello_tuning_profile_order
          | select('in', _katello_tuning_profiles | dict2items
-                        | selectattr('value.cpus', '<=', _katello_cpus | int)
+                        | selectattr('value.cpus', '<=', _katello_host_cpus | int)
                         | selectattr('value.ram_gb', '<=', _katello_ram_gb | int)
                         | map(attribute='key') | list)
          | list }}
