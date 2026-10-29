@@ -1,42 +1,38 @@
 ---
-# Fast scenario: prepares two AlmaLinux 9 systemd containers, a Katello
+# Fast scenario: prepares two AlmaLinux systemd containers (Podman), a Katello
 # server (with a role-generated self-signed certificate) and a smart proxy,
 # without running the installer, which needs a full VM with 20 GB RAM. Use
-# the "full" and "proxy" scenarios for real installs.
+# the "full" and "proxy" scenarios for real installs. MOLECULE_IMAGE picks
+# the image, for example docker.io/almalinux/10-init.
 dependency:
   name: galaxy
   options:
-    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/../../requirements.yml
+    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/requirements.yml
 
 driver:
-  name: docker
+  name: podman
 
 platforms:
-  - name: katello-alma9
+  - name: katello-server
     image: ${MOLECULE_IMAGE:-docker.io/almalinux/9-init}
     pre_build_image: true
     hostname: katello.example.test
     command: /usr/sbin/init
+    systemd: always
     privileged: true
-    cgroupns_mode: host
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-    tmpfs:
-      - /run
-  - name: katello-proxy-alma9
+  - name: katello-proxy
     image: ${MOLECULE_IMAGE:-docker.io/almalinux/9-init}
     pre_build_image: true
     hostname: proxy.example.test
     command: /usr/sbin/init
+    systemd: always
     privileged: true
-    cgroupns_mode: host
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-    tmpfs:
-      - /run
 
 provisioner:
   name: ansible
+  env:
+    # The role is the repository itself, so look for it next to the repository.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
   inventory:
     group_vars:
       all:
@@ -47,7 +43,7 @@ provisioner:
         katello_manage_firewall: false
         katello_upgrade_packages: false
     host_vars:
-      katello-alma9:
+      katello-server:
         katello_hostname: katello.example.test
         katello_ssl_mode: selfsigned
         katello_ssl_selfsigned_key_size: 2048
@@ -57,10 +53,10 @@ provisioner:
         katello_tuning: medium
         katello_custom_hiera:
           apache::mod::proxy::proxy_timeout: 600
-      katello-proxy-alma9:
+      katello-proxy:
         katello_hostname: proxy.example.test
         katello_deployment: proxy
-        katello_proxy_server: katello-alma9
+        katello_proxy_server: katello-server
         katello_foreman_proxy_plugins: [remote_execution_script]
 
 verifier:

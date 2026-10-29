@@ -1,7 +1,7 @@
 ---
 argument_specs:
   main:
-    short_description: Install Foreman with Katello 5.0 on RHEL 9 or AlmaLinux 9
+    short_description: Install Foreman with Katello 5.0 on RHEL or AlmaLinux 9 and 10
     options:
       katello_version:
         type: str
@@ -18,9 +18,10 @@ argument_specs:
         description: Install a Katello server or a Smart Proxy with content.
       katello_install_method:
         type: str
-        default: installer
         choices: [installer, foremanctl]
-        description: RPM-based foreman-installer, or containerized foremanctl.
+        description: >-
+          RPM-based foreman-installer (EL9 only), or containerized foremanctl (EL9 and EL10).
+          Defaults to installer on EL9 and foremanctl on EL10.
       katello_initial_organization:
         type: str
         default: Default Organization
@@ -72,6 +73,18 @@ argument_specs:
       katello_openvox_release_rpm:
         type: str
         description: URL of the OpenVox release RPM (installer method only).
+      katello_foreman_gpg_key:
+        type: str
+        description: URL of the Foreman signing key, which signs foreman-release and katello-repos.
+      katello_foreman_gpg_fingerprint:
+        type: str
+        description: Expected fingerprint of katello_foreman_gpg_key. Empty skips the check.
+      katello_openvox_gpg_key:
+        type: str
+        description: URL of the OpenVox signing key (installer method only).
+      katello_openvox_gpg_fingerprint:
+        type: str
+        description: Expected fingerprint of katello_openvox_gpg_key. Empty skips the check.
       katello_manage_rhel_repos:
         type: bool
         default: true
@@ -79,7 +92,7 @@ argument_specs:
       katello_rhel_repos:
         type: list
         elements: str
-        description: RHEL repositories to enable.
+        description: RHEL repositories to enable (BaseOS and AppStream for the host's EL version).
       katello_upgrade_packages:
         type: bool
         default: true

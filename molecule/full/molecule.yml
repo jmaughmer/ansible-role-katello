@@ -1,12 +1,12 @@
 ---
-# Full scenario: runs the real install on an existing RHEL 9 or AlmaLinux 9
+# Full scenario: runs the real install on an existing RHEL or AlmaLinux 9 or 10
 # VM (20 GB RAM, 4 cores, 4 GB swap, resolvable FQDN). Molecule does not
 # create or destroy the VM. Point it at the VM with environment variables:
 #
 #   export KATELLO_TEST_HOST=katello.example.com
 #   export KATELLO_TEST_USER=root
 #   export KATELLO_TEST_ADMIN_PASSWORD='changeme123'
-#   export KATELLO_TEST_METHOD=installer   # or foremanctl
+#   export KATELLO_TEST_METHOD=installer   # or foremanctl (required on EL10)
 #   molecule test -s full
 #
 # Optional Red Hat content test (RHEL VM with CDN access): point
@@ -18,7 +18,7 @@
 dependency:
   name: galaxy
   options:
-    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/../../requirements.yml
+    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/requirements.yml
 
 driver:
   name: default
@@ -33,6 +33,9 @@ platforms:
 
 provisioner:
   name: ansible
+  env:
+    # The role is the repository itself, so look for it next to the repository.
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
   inventory:
     hosts:
       all:

@@ -32,8 +32,10 @@
     - katello_deployment == 'server'
     - katello_ssl_mode != 'default'
 
+# A dynamic include, so servers never load these tasks: ansible-core 2.19+
+# templates delegate_to before "when", and katello_proxy_server is empty there.
 - name: Create the smart proxy certificate bundle on the Katello server
-  ansible.builtin.import_tasks: proxy_bundle.yml
+  ansible.builtin.include_tasks: proxy_bundle.yml
   when:
     - katello_deployment == 'proxy'
     - katello_run_installer | bool

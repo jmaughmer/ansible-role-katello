@@ -3,12 +3,13 @@
   ansible.builtin.assert:
     that:
       - ansible_facts['distribution'] in _katello_supported_distributions
-      - ansible_facts['distribution_major_version'] == '9'
+      - _katello_el in _katello_methods_by_el
       - ansible_facts['architecture'] == 'x86_64'
     fail_msg: >-
-      Katello {{ katello_version }} is supported by this role on RHEL 9 and
-      AlmaLinux 9 (x86_64) only. Found {{ ansible_facts['distribution'] }}
-      {{ ansible_facts['distribution_version'] }} ({{ ansible_facts['architecture'] }}).
+      Katello {{ katello_version }} is supported by this role on RHEL and
+      AlmaLinux {{ _katello_methods_by_el | join(' and ') }} (x86_64) only. Found
+      {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+      ({{ ansible_facts['architecture'] }}).
     quiet: true
 
 - name: Assert the install method is valid
@@ -16,6 +17,15 @@
     that:
       - katello_install_method in _katello_supported_methods
     fail_msg: "katello_install_method must be one of {{ _katello_supported_methods | join(', ') }}."
+    quiet: true
+
+- name: Assert the install method is available on this EL version
+  ansible.builtin.assert:
+    that:
+      - katello_install_method in _katello_methods_by_el[_katello_el]
+    fail_msg: >-
+      katello_install_method: {{ katello_install_method }} is not available on EL{{ _katello_el }};
+      Katello {{ katello_version }} supports {{ _katello_methods_by_el[_katello_el] | join(', ') }} there.
     quiet: true
 
 - name: Assert the deployment type and SSL mode are valid

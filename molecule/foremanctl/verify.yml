@@ -1,0 +1,177 @@
+---
+- name: Verify both hosts
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Gather package facts
+      ansible.builtin.package_facts:
+        manager: rpm
+
+    - name: Assert foremanctl is installed and the RPM installer is not
+      ansible.builtin.assert:
+        that:
+          - "'foreman-release' in ansible_facts.packages"
+          - "'katello-repos' in ansible_facts.packages"
+          - "'foremanctl' in ansible_facts.packages"
+          - "'foreman-installer-katello' not in ansible_facts.packages"
+          - "'foreman-proxy-content' not in ansible_facts.packages"
+          # OpenVox (Puppet) is only needed by foreman-installer.
+          - "'openvox8-release' not in ansible_facts.packages"
+
+    - name: Assert the repositories match the host's EL version
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.packages['foreman-release'][0].release is search('\.el' ~ ansible_facts['distribution_major_version'] ~ '$')
+          - ansible_facts.packages['katello-repos'][0].release is search('\.el' ~ ansible_facts['distribution_major_version'] ~ '$')
+          - ansible_facts.packages['foreman-release'][0].version is version('5.0', '>=')
+          - ansible_facts.packages['foreman-release'][0].version is version('5.1', '<')
+
+    - name: Check that the Foreman signing key was imported
+      ansible.builtin.command:
+        argv: [rpm, -q, gpg-pubkey-ff7d88bf]
+      changed_when: false
+
+    - name: List enabled repositories
+      ansible.builtin.command:
+        argv: [dnf, repolist, --enabled]
+      register: _katello_test_repolist
+      changed_when: false
+
+    - name: Assert the Foreman and Katello repositories are enabled
+      ansible.builtin.assert:
+        that:
+          - _katello_test_repolist.stdout is search('(?im)^foreman\s')
+          - _katello_test_repolist.stdout is search('(?im)^katello\s')
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert chronyd is running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['chronyd.service'].state == 'running'
+
+    - name: Read the katello tuned profile
+      ansible.builtin.slurp:
+        src: /etc/tuned/katello/tuned.conf
+      register: _katello_test_tuned
+
+    - name: Assert the profile disables THP
+      ansible.builtin.assert:
+        that:
+          - "'transparent_hugepages=never' in (_katello_test_tuned.content | b64decode)"
+
+    - name: Check that no foreman-installer Hiera file was written
+      ansible.builtin.stat:
+        path: /etc/foreman-installer/custom-hiera.yaml
+      register: _katello_test_hiera
+
+    - name: Check that no install was attempted
+      ansible.builtin.stat:
+        path: /var/lib/ansible-katello/install.sha256
+      register: _katello_test_state
+
+    - name: Assert custom-hiera.yaml is absent and foremanctl did not run
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_hiera.stat.exists
+          - not _katello_test_state.stat.exists
+
+- name: Verify the self-signed certificate on the server
+  hosts: katello-server
+  gather_facts: false
+  tasks:
+    - name: Read the server certificate
+      community.crypto.x509_certificate_info:
+        path: /root/foreman_cert/foreman_cert.pem
+      register: _katello_test_cert
+
+    - name: Assert the certificate names the server
+      ansible.builtin.assert:
+        that:
+          - _katello_test_cert.subject.commonName == 'katello.example.test'
+          - "'DNS:katello.example.test' in _katello_test_cert.subject_alt_name"
+          - not _katello_test_cert.expired
+
+    - name: Verify the chain with openssl
+      ansible.builtin.command:
+        argv: [openssl, verify, -CAfile, /root/foreman_cert/ca_cert_bundle.pem, /root/foreman_cert/foreman_cert.pem]
+      changed_when: false
+
+- name: Verify the smart proxy host
+  hosts: katello-proxy
+  gather_facts: false
+  tasks:
+    - name: Check that no server certificate was generated on the proxy
+      ansible.builtin.stat:
+        path: /root/foreman_cert
+      register: _katello_test_proxy_ssl_dir
+
+    - name: Assert the proxy has no server certificate directory
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_proxy_ssl_dir.stat.exists
+
+- name: Verify install method validation
+  hosts: katello-server
+  gather_facts: true
+  tasks:
+    - name: Run the role with foremanctl and custom Hiera settings
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_install_method: foremanctl
+            katello_custom_hiera:
+              apache::mod::proxy::proxy_timeout: 600
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_hiera_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_hiera_passed: false
+            _katello_test_hiera_msg: "{{ ansible_failed_result.msg }}"
+
+    - name: Assert custom Hiera settings are rejected with foremanctl
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_hiera_passed
+          - _katello_test_hiera_msg is search('katello_custom_hiera only works with')
+
+    - name: Run the role with the RPM installer on EL10
+      when: ansible_facts['distribution_major_version'] == '10'
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_install_method: installer
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_el10_installer_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_el10_installer_passed: false
+            _katello_test_el10_installer_msg: "{{ ansible_failed_result.msg }}"
+
+    - name: Assert the RPM installer is rejected on EL10
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_el10_installer_passed
+          - _katello_test_el10_installer_msg is search('installer is not available on EL10')
+      when: ansible_facts['distribution_major_version'] == '10'
+
+    - name: Accept the RPM installer on EL9
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: assert.yml
+      vars:
+        katello_install_method: installer
+      when: ansible_facts['distribution_major_version'] == '9'

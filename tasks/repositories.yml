@@ -7,6 +7,20 @@
     - ansible_facts['distribution'] == 'RedHat'
     - katello_manage_rhel_repos | bool
 
+# The dnf module checks the signatures of packages installed from a URL, so
+# the keys must be in the RPM database first.
+- name: Import the repository signing keys
+  ansible.builtin.rpm_key:
+    key: "{{ item.key }}"
+    fingerprint: "{{ item.fingerprint if item.fingerprint | length > 0 else omit }}"
+    state: present
+  loop: >-
+    {{ [{'key': katello_foreman_gpg_key, 'fingerprint': katello_foreman_gpg_fingerprint}]
+       + ([{'key': katello_openvox_gpg_key, 'fingerprint': katello_openvox_gpg_fingerprint}]
+          if katello_install_method == 'installer' else []) }}
+  loop_control:
+    label: "{{ item.key }}"
+
 - name: Install the Foreman and Katello repository packages
   ansible.builtin.dnf:
     name: "{{ [katello_foreman_release_rpm, katello_repos_rpm]
