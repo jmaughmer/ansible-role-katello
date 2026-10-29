@@ -5,12 +5,18 @@ _katello_supported_distributions:
 _katello_supported_methods:
   - installer
   - foremanctl
-# Enterprise Linux major version of the target host, and the install methods
-# Katello 5.0 publishes for it (EL10 has no foreman-installer-katello).
+# Enterprise Linux major version of the target host, and the install method
+# the role supports there: the RPM installer on EL9, containers on EL10 (which
+# has no foreman-installer-katello).
 _katello_el: "{{ ansible_facts['distribution_major_version'] }}"
 _katello_methods_by_el:
-  "9": [installer, foremanctl]
+  "9": [installer]
   "10": [foremanctl]
+
+# Host resources used by the tuning selection and the pre-flight checks.
+_katello_host_cpus: "{{ ansible_facts['processor_vcpus'] | default(ansible_facts['processor_count']) | int }}"
+_katello_host_memory_mb: "{{ ansible_facts['memtotal_mb'] | int }}"
+_katello_host_swap_mb: "{{ ansible_facts['swaptotal_mb'] | int }}"
 
 _katello_supported_deployments:
   - server
@@ -68,6 +74,8 @@ _katello_firewall:
 # Records the arguments of the last successful install so reruns are skipped.
 _katello_state_dir: /var/lib/ansible-katello
 _katello_state_file: "{{ _katello_state_dir }}/install.sha256"
+# foremanctl keeps the parameters of its last run here and reuses them.
+_katello_foremanctl_params_file: /var/lib/foremanctl/parameters.yaml
 
 # LDAP auth source defaults. Values given in katello_ldap_auth_sources win.
 _katello_ldap_server_types:

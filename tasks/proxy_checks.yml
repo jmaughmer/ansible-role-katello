@@ -1,0 +1,59 @@
+---
+# Runs on the proxy before anything is changed, so a proxy that cannot work
+# with its Katello server fails early. Reads from the server are delegated to
+# katello_proxy_server.
+- name: Gather the Katello server's facts
+  ansible.builtin.setup:
+    gather_subset: [min]
+  delegate_to: "{{ katello_proxy_server }}"
+  delegate_facts: true
+  when: hostvars[katello_proxy_server]['ansible_facts']['distribution_major_version'] is not defined
+
+# The bundle is generated on the server with the proxy's install method, and
+# each EL version has one method, so both must run the same EL version.
+- name: Assert the proxy runs the same EL version as its Katello server
+  ansible.builtin.assert:
+    that:
+      - hostvars[katello_proxy_server]['ansible_facts']['distribution_major_version'] == _katello_el
+    fail_msg: >-
+      The smart proxy runs EL{{ _katello_el }} but its Katello server {{ katello_proxy_server }} runs
+      EL{{ hostvars[katello_proxy_server]['ansible_facts']['distribution_major_version'] }}. The role
+      installs EL9 with foreman-installer and EL10 with foremanctl, and a proxy must use the same
+      install method as its server, so put both on the same EL major version.
+    quiet: true
+
+- name: Check the Katello server's certificate source
+  when: katello_install_method == 'foremanctl'
+  block:
+    - name: Read the Katello server's foremanctl parameters
+      ansible.builtin.slurp:
+        src: "{{ _katello_foremanctl_params_file }}"
+      delegate_to: "{{ katello_proxy_server }}"
+      register: _katello_proxy_server_params
+      failed_when: false
+      # The file holds the initial admin password.
+      no_log: true
+
+    - name: Assert the Katello server was deployed with foremanctl
+      ansible.builtin.assert:
+        that:
+          - _katello_proxy_server_params.content is defined
+        fail_msg: >-
+          The Katello server {{ katello_proxy_server }} has no {{ _katello_foremanctl_params_file }}.
+          Deploy it with the role before its smart proxies.
+        quiet: true
+
+    # foremanctl auth-bundle needs the proxy's certificate exactly when the
+    # server uses its own certificates, and refuses one otherwise.
+    - name: Assert the proxy certificate mode matches the Katello server
+      ansible.builtin.assert:
+        that:
+          - (katello_ssl_mode == 'default') == (_katello_server_cert_source == 'default')
+        fail_msg: >-
+          The Katello server uses the certificate source {{ _katello_server_cert_source }}, so the
+          proxy needs katello_ssl_mode: {{ 'default' if _katello_server_cert_source == 'default'
+          else 'custom or selfsigned' }} (found {{ katello_ssl_mode }}).
+        quiet: true
+      vars:
+        _katello_server_cert_source: >-
+          {{ ((_katello_proxy_server_params.content | b64decode | from_yaml) or {}).certificates_source | default('default') }}

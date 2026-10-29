@@ -9,12 +9,11 @@ katello_foreman_version: "5.0"
 #            certificate bundle is created on katello_proxy_server.
 katello_deployment: server
 
-# How to install:
+# How to install. Each EL version supports one method, which is the default:
 #   installer  - RPM-based install with foreman-installer --scenario katello
-#                (EL9 only)
+#                (EL9)
 #   foremanctl - containerized install (Podman quadlets) managed by foremanctl
-#                (EL9 and EL10)
-# The default is installer on EL9 and foremanctl on EL10.
+#                (EL10)
 katello_install_method: "{{ 'foremanctl' if _katello_el == '10' else 'installer' }}"
 
 # Initial objects. The organization label is generated once and cannot be
@@ -82,7 +81,7 @@ katello_force_install: false
 # Seconds the installer may run before Ansible gives up.
 katello_install_timeout: 7200
 # Tuning (server only; smart proxies cannot use tuning profiles).
-#   ""                  - let the installer decide (its "default" profile)
+#   ""                  - the "default" profile
 #   default, medium, large, extra-large, extra-extra-large - that profile
 #   auto                - pick the profile for katello_managed_hosts, or, if
 #                         that is 0, the largest profile the hardware supports
@@ -121,8 +120,11 @@ katello_tuned_parent_profile: throughput-performance
 # Extra arguments passed as-is to foreman-installer, for example
 #   - --enable-foreman-plugin-remote-execution
 katello_installer_extra_args: []
-# foremanctl only: features to add (see "foremanctl features"), extra
-# hostnames the server answers on, and extra arguments.
+# foremanctl only: features to add (see "foremanctl features"; underscores
+# and hyphens are both accepted), extra hostnames the server answers on, and
+# extra arguments. foremanctl remembers features and aliases between runs, so
+# the role removes the ones that are no longer listed, including ones added
+# outside the role.
 katello_foremanctl_features: []
 katello_foremanctl_server_aliases: []
 katello_foremanctl_extra_args: []

@@ -2,12 +2,8 @@
 - name: Converge
   hosts: all
   tasks:
-    # EL10 picks foremanctl by default, which this scenario relies on.
-    - name: Use foremanctl on EL9
-      ansible.builtin.set_fact:
-        katello_install_method: foremanctl
-      when: ansible_facts['distribution_major_version'] == '9'
-
+    # katello_install_method is left unset, so this also checks that EL10
+    # picks foremanctl.
     - name: Include the katello role
       ansible.builtin.include_role:
         name: ansible-role-katello

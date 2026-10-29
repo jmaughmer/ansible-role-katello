@@ -5,7 +5,7 @@ galaxy_info:
   author: Justin Maughmer
   description: Install Foreman with Katello 5.0 on RHEL or AlmaLinux 9 and 10
   license: MIT
-  min_ansible_version: "2.15"
+  min_ansible_version: "2.16"
   platforms:
     - name: EL
       versions:

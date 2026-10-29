@@ -5,19 +5,21 @@ Smart Proxy with content, on RHEL or AlmaLinux 9 and 10 (x86_64), with Molecule 
 
 It follows the upstream guide,
 [Installing Foreman Server with Katello 5.0](https://docs.theforeman.org/5.0/Installing_Server/index-katello.html),
-and supports both install methods Katello 5.0 offers:
+and installs with one method per EL version:
 
-| `katello_install_method` | What it does | EL9 | EL10 |
-| --- | --- | --- | --- |
-| `installer` | RPM install with `foreman-installer --scenario katello` | yes (default) | no |
-| `foremanctl` | Containerized install (Podman) with `foremanctl deploy` ([guide](https://docs.theforeman.org/5.0/Installing_Server/index-containerized-katello.html)) | yes | yes (default) |
+| EL version | `katello_install_method` | What it does |
+| --- | --- | --- |
+| 9 | `installer` | RPM install with `foreman-installer --scenario katello` |
+| 10 | `foremanctl` | Containerized install (Podman) with `foremanctl deploy` ([guide](https://docs.theforeman.org/5.0/Installing_Server/index-containerized-katello.html)) |
 
-Katello 5.0 does not ship `foreman-installer-katello` for EL10, so on EL10 the
-role defaults to `foremanctl` and rejects `installer`.
+`katello_install_method` defaults to the host's method, and the role rejects
+the other one. Katello 5.0 does not ship `foreman-installer-katello` for
+EL10, and the role does not use containers on EL9. A smart proxy uses the same
+method as its server, so it must run the same EL major version.
 
 ## What the role does
 
-1. Checks the platform (RHEL/AlmaLinux 9 or 10, x86_64), that the install method exists for it, the admin password and the hostname format.
+1. Checks the platform (RHEL/AlmaLinux 9 or 10, x86_64), that the install method matches it, the admin password and the hostname format. A smart proxy also checks that it fits its server (see "Smart proxy").
 2. Optionally sets the hostname (`katello_set_hostname`).
 3. Picks the tuning profile and runs pre-flight checks from the guide: RAM and
    cores for that profile (20 GB and 4 for default), 4 GB swap, SELinux not
@@ -37,10 +39,23 @@ role defaults to `foremanctl` and rejects `installer`.
    repositories enabled from it (see below).
 
 The installer runs once. The role stores a fingerprint of the installer
-arguments (plus certificate and `custom-hiera.yaml` checksums) in `/var/lib/ansible-katello/install.sha256` and re-runs only when
-those arguments change (or `katello_force_install: true`). Changing the
-initial organization, location, admin username or admin password does not
-re-run it, because the `--initial-*` options only apply to a new database.
+arguments, the certificate and `custom-hiera.yaml` checksums and the version
+of the installer package (`foreman-installer-katello`, `foreman-proxy-content`
+or `foremanctl`) in `/var/lib/ansible-katello/install.sha256`. It re-runs the
+installer only when one of those changes (or `katello_force_install: true`),
+so an upgraded installer package (from `katello_upgrade_packages`) is applied.
+Changing the initial organization, location, admin username or admin password
+does not re-run it, because the `--initial-*` options only apply to a new
+database.
+
+Both installers remember settings between runs. The role always passes
+`--tuning`, so emptying `katello_tuning` goes back to the `default` profile.
+With `foremanctl`, the role also removes features and server aliases that are
+no longer in `katello_foremanctl_features` or `katello_foremanctl_server_aliases`
+(`--remove-feature`, and for aliases an edit of
+`/var/lib/foremanctl/parameters.yaml`, because foremanctl cannot drop one
+alias). With `foreman-installer`, removing a plugin from the lists does not
+uninstall it.
 
 ## Usage
 
@@ -51,6 +66,9 @@ cp examples/inventory.example.yml inventory.yml   # edit the host name
 ansible-vault create group_vars/all/vault.yml   # vault_katello_admin_password: ...
 ansible-playbook examples/site.yml --ask-vault-pass
 ```
+
+The role needs ansible-core 2.16 or later, the first release that supports
+Python 3.12, which EL10 runs.
 
 Run these from the repository root. `ansible.cfg` sets `roles_path = ../`, so
 the clone must be in a directory named `ansible-role-katello` for
@@ -68,7 +86,7 @@ an SSH drop will not kill it.
 | `katello_initial_organization` | `Default Organization` | Its label cannot be changed later. |
 | `katello_initial_location` | `Default Location` | |
 | `katello_deployment` | `server` | `server` or `proxy` |
-| `katello_install_method` | `installer` | `installer` or `foremanctl` |
+| `katello_install_method` | `installer` on EL9, `foremanctl` on EL10 | The only method the host's EL version supports. |
 | `katello_ssl_mode` | `default` | `default`, `custom` or `selfsigned` |
 | `katello_proxy_server` | `""` | Proxy only: inventory name of the server. |
 | `katello_foreman_plugins` | `[]` | Also `katello_foreman_proxy_plugins`, `katello_foreman_cli_plugins`. |
@@ -77,8 +95,8 @@ an SSH drop will not kill it.
 | `katello_tuning` | `""` | `auto`, `default`, `medium`, `large`, `extra-large`, `extra-extra-large` |
 | `katello_managed_hosts` | `0` | Expected host count, used by `katello_tuning: auto`. |
 | `katello_installer_extra_args` | `[]` | Extra `foreman-installer` flags. |
-| `katello_foremanctl_features` | `[]` | Passed as `--add-feature=`. |
-| `katello_foremanctl_server_aliases` | `[]` | Passed as `--server-alias=`. |
+| `katello_foremanctl_features` | `[]` | Passed as `--add-feature=` (`remote_execution` becomes `remote-execution`); features no longer listed are removed. |
+| `katello_foremanctl_server_aliases` | `[]` | Passed as `--server-alias=`; aliases no longer listed are removed. |
 | `katello_preflight_enforce` | `true` | `false` turns failed checks into warnings. |
 | `katello_manage_rhel_repos` | `true` | Turn off if RHEL content comes from elsewhere. |
 | `katello_manage_firewall` | `true` | |
@@ -157,7 +175,8 @@ katello_installer_extra_args:                                               # pl
 Underscores and hyphens both work in names. Adding a plugin to the list
 re-runs the installer to enable it. On a smart proxy only
 `katello_foreman_proxy_plugins` applies. With `foremanctl`, the plugin lists
-are rejected; use `katello_foremanctl_features` instead (see `foremanctl features`).
+are rejected; use `katello_foremanctl_features` instead (see `foremanctl features`),
+which the role rejects with the RPM installer.
 
 ## SSL certificates
 
@@ -214,18 +233,24 @@ katello_foreman_proxy_plugins: [remote_execution_script, ansible]
 
 What happens:
 
-1. The proxy gets the same repositories and its own pre-flight checks (12 GB RAM).
-2. On the Katello server (with `delegate_to`), the role makes the proxy's
+1. Before changing anything, the role checks that the proxy runs the same EL
+   major version as the server. With `foremanctl`, it also reads the server's
+   `/var/lib/foremanctl/parameters.yaml` to check that the server was deployed
+   and that the proxy's `katello_ssl_mode` fits the server's certificates
+   (`foremanctl auth-bundle` needs a proxy certificate when the server uses
+   its own, and refuses one otherwise).
+2. The proxy gets the same repositories and its own pre-flight checks (12 GB RAM).
+3. On the Katello server (with `delegate_to`), the role makes the proxy's
    certificate bundle: `foreman-proxy-certs-generate` for the installer method,
    `foremanctl auth-bundle` for foremanctl. Files go in
    `katello_proxy_cert_dir` (`/root/smart-proxy_cert`).
-3. The bundle is copied straight from the server to the proxy through Ansible
+4. The bundle is copied straight from the server to the proxy through Ansible
    (it never lands on your machine) and kept in `/var/lib/ansible-katello`,
    because upgrades need it.
-4. The proxy installs with `foreman-installer --scenario foreman-proxy-content`
+5. The proxy installs with `foreman-installer --scenario foreman-proxy-content`
    (OAuth credentials are read from the server's installer answers) or
    `foremanctl deploy-proxy`.
-5. The role registers the proxy, assigns its organizations and locations, and
+6. The role registers the proxy, assigns its organizations and locations, and
    refreshes its features from the server to prove the two can talk.
 
 The proxy's certificate comes from its own `katello_ssl_mode`:
@@ -235,6 +260,10 @@ The proxy's certificate comes from its own `katello_ssl_mode`:
   set on the proxy). It must come from the same CA as the server's certificate.
 - `selfsigned`: signed by the role-generated CA on the server. The server must
   use `katello_ssl_mode: selfsigned` too.
+
+With `foremanctl`, a proxy of a server with `default` certificates must use
+`default`, and a proxy of a server with `custom` or `selfsigned` certificates
+must use `custom` or `selfsigned`.
 
 The proxy needs the server's `katello_admin_username`/`katello_admin_password`
 to register, so keep those in `group_vars/all`. Set
@@ -464,12 +493,17 @@ AlmaLinux 10 with `podman` installed); Ansible does not run natively on Windows.
 ```bash
 ansible-galaxy collection install containers.podman   # used by the Podman driver
 molecule test                  # default scenario (EL9, installer)
-molecule test -s foremanctl    # foremanctl on EL10
-MOLECULE_IMAGE=docker.io/almalinux/9-init molecule test -s foremanctl   # foremanctl on EL9
+molecule test -s foremanctl    # foremanctl scenario (EL10)
 molecule test -s full          # full install on a VM
 ```
 
-### `default` scenario (fast, containers)
+Negative tests check which assertion failed, so a test only passes when the
+role rejects the input for the expected reason. The container scenarios use
+AlmaLinux: RHEL UBI images lack packages the role installs (such as
+`chrony`), so test RHEL with the `full` and `proxy` scenarios on subscribed
+VMs.
+
+### `default` scenario (fast, containers, EL9)
 
 Uses two `almalinux/9-init` systemd containers under Podman: a server (with
 `katello_ssl_mode: selfsigned`) and a smart proxy. A container cannot meet the
@@ -488,8 +522,9 @@ skips firewalld. It covers everything up to the installer:
   SANs, key usage and chain; reusing them in `custom` mode passes the checks,
   while a wrong key or a certificate for another hostname fails them
 - custom mode without a certificate, a proxy pointing at a host outside the
-  inventory, installer plugin lists with foremanctl, and a tuning profile on a
-  proxy are rejected
+  inventory, `foremanctl` on EL9, foremanctl features with the RPM installer,
+  and a tuning profile on a proxy are rejected; a proxy on the same EL
+  version as its server passes the proxy checks
 - both hosts get the `katello` tuned profile with THP off; the server's
   `custom-hiera.yaml` gets the medium-profile PostgreSQL settings and the
   extra Hiera key, and the proxy's is untouched
@@ -499,15 +534,22 @@ skips firewalld. It covers everything up to the installer:
 - an unknown LDAP attribute key, an internal user without a password and a
   group that contains itself are rejected; a full users, groups and LDAP
   mapping config is accepted
+- the pre-flight checks report too little RAM, swap and CPU (and stop the run
+  when enforced) and pass a large enough host; `katello_tuning: auto` picks
+  the right profile for host counts and hardware sizes
+- the `foreman-installer` commands for the server and the proxy: certificate,
+  plugin, tuning and proxy options, the `--initial-*` options kept out of the
+  fingerprint (changing them or the admin password keeps it, changing a
+  plugin does not), and `--tuning default` when `katello_tuning` is empty
 
 Override the image with `MOLECULE_IMAGE=...`. It tests the RPM installer, so
 it needs an EL9 image.
 
-### `foremanctl` scenario (fast, containers, EL10 or EL9)
+### `foremanctl` scenario (fast, containers, EL10)
 
 The same setup as `default` (it reuses its `prepare.yml`), but for the
-`foremanctl` method on `almalinux/10-init` by default. On EL10 the method is
-left unset, so the run also checks that the role picks `foremanctl` there. It
+`foremanctl` method on `almalinux/10-init` by default. The method is left
+unset, so the run also checks that the role picks `foremanctl` on EL10. It
 checks that:
 
 - `foreman-release` and `katello-repos` match the host's EL version, the
@@ -516,21 +558,27 @@ checks that:
 - no `custom-hiera.yaml` is written and `foremanctl` did not run
 - chronyd runs, the tuned profile disables THP, and the server's self-signed
   certificate names the server and verifies against its CA
-- `katello_custom_hiera` with `foremanctl` is rejected, the RPM installer is
-  rejected on EL10 and accepted on EL9
+- `katello_custom_hiera`, the RPM installer, installer plugin lists and a
+  malformed feature name are rejected on EL10
+- the `foremanctl deploy` command: certificate, feature, alias and tuning
+  options, underscores in feature names, the `--initial-*` options kept out of
+  the fingerprint, and, given the parameters of an earlier foremanctl run,
+  `--remove-feature` and the alias removal for entries no longer listed
+- the `foremanctl deploy-proxy` command, and the proxy checks: a proxy whose
+  certificate mode fits the server passes, while one that does not, one on
+  another EL version and one for a server that was never deployed fail
 
 ### `full` scenario (real install, existing VM)
 
 Runs the whole role, including the installer, against a VM you provide
-(RHEL or AlmaLinux 9, or 10 with `KATELLO_TEST_METHOD=foremanctl`; 20 GB RAM,
-4 cores, 4 GB swap, a resolvable FQDN, SSH key access). Molecule does not
+(RHEL or AlmaLinux 9 with `foreman-installer`, or 10 with `foremanctl`; 20 GB
+RAM, 4 cores, 4 GB swap, a resolvable FQDN, SSH key access). Molecule does not
 create or destroy the VM, so use a throwaway one.
 
 ```bash
 export KATELLO_TEST_HOST=katello.example.com
 export KATELLO_TEST_USER=root
 export KATELLO_TEST_ADMIN_PASSWORD='changeme123'
-export KATELLO_TEST_METHOD=installer      # or foremanctl
 molecule test -s full
 ```
 
@@ -573,14 +621,14 @@ export KATELLO_TEST_RH_REPO_LABEL=rhel-9-for-x86_64-baseos-rpms   # default
 
 ### `proxy` scenario (server + proxy, existing VMs)
 
-Installs a server and a smart proxy on two VMs you provide (server 20 GB RAM,
-proxy 12 GB), by default with `katello_ssl_mode: selfsigned`:
+Installs a server and a smart proxy on two VMs you provide, both on the same
+EL major version (server 20 GB RAM, proxy 12 GB), by default with
+`katello_ssl_mode: selfsigned`:
 
 ```bash
 export KATELLO_TEST_HOST=katello.example.com
 export KATELLO_TEST_PROXY_HOST=proxy.example.com
 export KATELLO_TEST_ADMIN_PASSWORD='changeme123'
-export KATELLO_TEST_METHOD=installer      # or foremanctl
 export KATELLO_TEST_SSL_MODE=selfsigned   # or default
 molecule test -s proxy
 ```

@@ -112,18 +112,24 @@
         that:
           - not _katello_test_proxy_ssl_dir.stat.exists
 
-- name: Verify install method validation
+- name: Verify input validation on EL10
   hosts: katello-server
   gather_facts: true
+  vars:
+    # The failed assertions of the task that sent a block to "rescue", so a
+    # negative test only passes if it failed for the expected reason.
+    _katello_test_failed_assertions: >-
+      {{ ([ansible_failed_result] + ansible_failed_result.results | default([]))
+         | selectattr('failed', 'defined') | selectattr('failed')
+         | map(attribute='assertion', default='') | join(' | ') }}
   tasks:
-    - name: Run the role with foremanctl and custom Hiera settings
+    - name: Run the role with custom Hiera settings
       block:
         - name: Include the role's validation tasks
           ansible.builtin.include_role:
             name: ansible-role-katello
             tasks_from: assert.yml
           vars:
-            katello_install_method: foremanctl
             katello_custom_hiera:
               apache::mod::proxy::proxy_timeout: 600
 
@@ -134,16 +140,18 @@
         - name: Record the expected failure
           ansible.builtin.set_fact:
             _katello_test_hiera_passed: false
-            _katello_test_hiera_msg: "{{ ansible_failed_result.msg }}"
+            _katello_test_hiera_reason: "{{ _katello_test_failed_assertions }}"
 
     - name: Assert custom Hiera settings are rejected with foremanctl
       ansible.builtin.assert:
         that:
           - not _katello_test_hiera_passed
-          - _katello_test_hiera_msg is search('katello_custom_hiera only works with')
+          - _katello_test_expected in _katello_test_hiera_reason
+        fail_msg: "Failed for another reason: {{ _katello_test_hiera_reason }}"
+      vars:
+        _katello_test_expected: "katello_install_method == 'installer' or katello_custom_hiera"
 
-    - name: Run the role with the RPM installer on EL10
-      when: ansible_facts['distribution_major_version'] == '10'
+    - name: Run the role with the RPM installer
       block:
         - name: Include the role's validation tasks
           ansible.builtin.include_role:
@@ -154,24 +162,337 @@
 
         - name: Fail because validation passed
           ansible.builtin.set_fact:
-            _katello_test_el10_installer_passed: true
+            _katello_test_installer_passed: true
       rescue:
         - name: Record the expected failure
           ansible.builtin.set_fact:
-            _katello_test_el10_installer_passed: false
-            _katello_test_el10_installer_msg: "{{ ansible_failed_result.msg }}"
+            _katello_test_installer_passed: false
+            _katello_test_installer_reason: "{{ _katello_test_failed_assertions }}"
 
     - name: Assert the RPM installer is rejected on EL10
       ansible.builtin.assert:
         that:
-          - not _katello_test_el10_installer_passed
-          - _katello_test_el10_installer_msg is search('installer is not available on EL10')
-      when: ansible_facts['distribution_major_version'] == '10'
+          - not _katello_test_installer_passed
+          - _katello_test_expected in _katello_test_installer_reason
+        fail_msg: "Failed for another reason: {{ _katello_test_installer_reason }}"
+      vars:
+        _katello_test_expected: "katello_install_method in _katello_methods_by_el[_katello_el]"
 
-    - name: Accept the RPM installer on EL9
+    - name: Run the role with installer plugin lists
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_foreman_plugins: [remote_execution]
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_plugin_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_plugin_passed: false
+            _katello_test_plugin_reason: "{{ _katello_test_failed_assertions }}"
+
+    - name: Assert installer plugin lists are rejected with foremanctl
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_plugin_passed
+          - _katello_test_expected in _katello_test_plugin_reason
+        fail_msg: "Failed for another reason: {{ _katello_test_plugin_reason }}"
+      vars:
+        _katello_test_expected: "katello_install_method == 'installer' or (katello_foreman_plugins"
+
+    - name: Run the role with a feature name that is not a name
+      block:
+        - name: Include the role's validation tasks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: assert.yml
+          vars:
+            katello_foremanctl_features: [Remote Execution]
+
+        - name: Fail because validation passed
+          ansible.builtin.set_fact:
+            _katello_test_feature_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_feature_passed: false
+            _katello_test_feature_reason: "{{ _katello_test_failed_assertions }}"
+
+    - name: Assert an invalid feature name is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_feature_passed
+          - _katello_test_expected in _katello_test_feature_reason
+        fail_msg: "Failed for another reason: {{ _katello_test_feature_reason }}"
+      vars:
+        _katello_test_expected: "katello_foremanctl_features | reject('match'"
+
+- name: Verify the foremanctl command for the server
+  hosts: katello-server
+  gather_facts: true
+  vars:
+    _katello_test_params_file: /var/lib/foremanctl/parameters.yaml
+  tasks:
+    - name: Select the tuning profile
       ansible.builtin.include_role:
         name: ansible-role-katello
-        tasks_from: assert.yml
+        tasks_from: tuning.yml
+
+    - name: Build the install command
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: install_args.yml
+
+    - name: Assert the command matches the host settings
+      ansible.builtin.assert:
+        that:
+          - _katello_install_args[:2] == ['foremanctl', 'deploy']
+          - "'--certificate-source custom_server' in _katello_test_command"
+          - "'--certificate-server-certificate /root/foreman_cert/foreman_cert.pem' in _katello_test_command"
+          - "'--certificate-server-key /root/foreman_cert/foreman_cert_key.pem' in _katello_test_command"
+          - "'--certificate-server-ca-certificate /root/foreman_cert/ca_cert_bundle.pem' in _katello_test_command"
+          - "'--add-feature=remote-execution' in _katello_install_args"
+          - "'--server-alias=katello-alias.example.test' in _katello_install_args"
+          - "'--tuning medium' in _katello_test_command"
+          - "'initial' not in _katello_test_command"
+          - _katello_install_initial_args == _katello_test_initial_args
+          - _katello_install_secret_args | length == 2
+          - _katello_install_secret_args[0] == '--initial-admin-password'
+          - _katello_install_runtime_args == []
+          - _katello_foremanctl_stale_aliases == []
+        fail_msg: "{{ _katello_install_args }}"
       vars:
-        katello_install_method: installer
-      when: ansible_facts['distribution_major_version'] == '9'
+        _katello_test_command: "{{ _katello_install_args | join(' ') }}"
+        _katello_test_initial_args:
+          - --initial-organization
+          - Default Organization
+          - --initial-location
+          - Default Location
+          - --initial-admin-username
+          - admin
+
+    - name: Record the fingerprint
+      ansible.builtin.set_fact:
+        _katello_test_fingerprint: "{{ _katello_install_fingerprint }}"
+
+    - name: Build the command with feature names that use underscores
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: install_args.yml
+      vars:
+        katello_foremanctl_features: [remote_execution, remote-execution, content/ostree]
+
+    - name: Assert the feature names are normalized and listed once
+      ansible.builtin.assert:
+        that:
+          - _katello_test_features == ['--add-feature=remote-execution', '--add-feature=content/ostree']
+        fail_msg: "{{ _katello_test_features }}"
+      vars:
+        _katello_test_features: "{{ _katello_install_args | select('match', '^--add-feature=') | list }}"
+
+    - name: Create the foremanctl state directory
+      ansible.builtin.file:
+        path: "{{ _katello_test_params_file | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0770"
+
+    # What foremanctl keeps after a deploy with one more feature and alias.
+    - name: Write the parameters of an earlier foremanctl run
+      ansible.builtin.copy:
+        dest: "{{ _katello_test_params_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          certificates_source: custom_server
+          features:
+          - remote-execution
+          - ansible
+          foreman_initial_admin_password: not-a-real-password
+          server_aliases:
+          - katello-alias.example.test
+          - old-alias.example.test
+          tuning: medium
+
+    - name: Build the command after that run
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: install_args.yml
+
+    - name: Assert the feature and alias that are no longer listed are removed
+      ansible.builtin.assert:
+        that:
+          - _katello_install_runtime_args == ['--remove-feature=ansible']
+          - _katello_foremanctl_kept_aliases == ['katello-alias.example.test']
+          - _katello_foremanctl_stale_aliases == ['old-alias.example.test']
+          # Removing them only applies to this run, so it is not fingerprinted.
+          - _katello_install_fingerprint == _katello_test_fingerprint
+        fail_msg: "{{ _katello_install_runtime_args }}"
+
+    - name: Build the command with other initial settings and admin password
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: install_args.yml
+      vars:
+        katello_admin_username: root
+        katello_admin_password: another-password
+        katello_initial_organization: Another Organization
+        katello_initial_location: Another Location
+
+    - name: Assert the initial settings do not change the fingerprint
+      ansible.builtin.assert:
+        that:
+          - "'Another Organization' in _katello_install_initial_args"
+          - _katello_install_fingerprint == _katello_test_fingerprint
+
+    - name: Build the command without features or aliases
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: install_args.yml
+      vars:
+        katello_foremanctl_features: []
+        katello_foremanctl_server_aliases: []
+
+    - name: Assert every kept feature and alias is removed and the fingerprint changes
+      ansible.builtin.assert:
+        that:
+          - _katello_install_runtime_args == ['--remove-feature=remote-execution', '--remove-feature=ansible']
+          - _katello_foremanctl_kept_aliases == []
+          - _katello_foremanctl_stale_aliases | length == 2
+          - _katello_install_fingerprint != _katello_test_fingerprint
+        fail_msg: "{{ _katello_install_runtime_args }}"
+
+- name: Verify the foremanctl command and checks for the smart proxy
+  hosts: katello-proxy
+  gather_facts: true
+  vars:
+    _katello_test_failed_assertions: >-
+      {{ ([ansible_failed_result] + ansible_failed_result.results | default([]))
+         | selectattr('failed', 'defined') | selectattr('failed')
+         | map(attribute='assertion', default='') | join(' | ') }}
+  tasks:
+    - name: Build the install command
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: install_args.yml
+
+    - name: Assert the command matches the proxy settings
+      ansible.builtin.assert:
+        that:
+          - _katello_install_args == _katello_test_command
+          - _katello_install_initial_args == []
+          - _katello_install_secret_args == []
+          - _katello_install_runtime_args == []
+        fail_msg: "{{ _katello_install_args }}"
+      vars:
+        _katello_test_command:
+          - foremanctl
+          - deploy-proxy
+          - --flavor
+          - foreman-proxy-content
+          - --auth-bundle
+          - /var/lib/ansible-katello/proxy.example.test.tar.gz
+          - --foreman-fqdn
+          - katello-server
+
+    # The server's parameters (written above) say it uses its own certificate.
+    - name: Accept a proxy with its own certificate
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: proxy_checks.yml
+      vars:
+        katello_ssl_mode: selfsigned
+
+    - name: Run the checks for a proxy with foremanctl's certificate
+      block:
+        - name: Include the proxy checks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: proxy_checks.yml
+          vars:
+            katello_ssl_mode: default
+
+        - name: Fail because the checks passed
+          ansible.builtin.set_fact:
+            _katello_test_proxy_ssl_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_proxy_ssl_passed: false
+            _katello_test_proxy_ssl_reason: "{{ _katello_test_failed_assertions }}"
+
+    - name: Assert a proxy certificate mode that differs from the server's is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_proxy_ssl_passed
+          - _katello_test_expected in _katello_test_proxy_ssl_reason
+        fail_msg: "Failed for another reason: {{ _katello_test_proxy_ssl_reason }}"
+      vars:
+        _katello_test_expected: "(katello_ssl_mode == 'default') == (_katello_server_cert_source == 'default')"
+
+    - name: Run the checks for a proxy on another EL version
+      block:
+        - name: Include the proxy checks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: proxy_checks.yml
+          vars:
+            _katello_el: "9"
+
+        - name: Fail because the checks passed
+          ansible.builtin.set_fact:
+            _katello_test_proxy_el_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_proxy_el_passed: false
+            _katello_test_proxy_el_reason: "{{ _katello_test_failed_assertions }}"
+
+    - name: Assert a proxy on another EL version than its server is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_proxy_el_passed
+          - _katello_test_expected in _katello_test_proxy_el_reason
+        fail_msg: "Failed for another reason: {{ _katello_test_proxy_el_reason }}"
+      vars:
+        _katello_test_expected: "['distribution_major_version'] == _katello_el"
+
+    - name: Remove the server's foremanctl parameters
+      ansible.builtin.file:
+        path: /var/lib/foremanctl/parameters.yaml
+        state: absent
+      delegate_to: katello-server
+
+    - name: Run the checks against a server that was not deployed
+      block:
+        - name: Include the proxy checks
+          ansible.builtin.include_role:
+            name: ansible-role-katello
+            tasks_from: proxy_checks.yml
+          vars:
+            katello_ssl_mode: selfsigned
+
+        - name: Fail because the checks passed
+          ansible.builtin.set_fact:
+            _katello_test_proxy_deployed_passed: true
+      rescue:
+        - name: Record the expected failure
+          ansible.builtin.set_fact:
+            _katello_test_proxy_deployed_passed: false
+            _katello_test_proxy_deployed_reason: "{{ _katello_test_failed_assertions }}"
+
+    - name: Assert a proxy for a server that was not deployed is rejected
+      ansible.builtin.assert:
+        that:
+          - not _katello_test_proxy_deployed_passed
+          - _katello_test_expected in _katello_test_proxy_deployed_reason
+        fail_msg: "Failed for another reason: {{ _katello_test_proxy_deployed_reason }}"
+      vars:
+        _katello_test_expected: "_katello_proxy_server_params.content is defined"

@@ -6,8 +6,9 @@
 #   export KATELLO_TEST_HOST=katello.example.com
 #   export KATELLO_TEST_USER=root
 #   export KATELLO_TEST_ADMIN_PASSWORD='changeme123'
-#   export KATELLO_TEST_METHOD=installer   # or foremanctl (required on EL10)
 #   molecule test -s full
+#
+# EL9 installs with foreman-installer, EL10 with foremanctl.
 #
 # Optional Red Hat content test (RHEL VM with CDN access): point
 # KATELLO_TEST_MANIFEST at a manifest zip on the controller. The scenario
@@ -46,7 +47,6 @@ provisioner:
             ansible_become: true
     group_vars:
       all:
-        katello_install_method: ${KATELLO_TEST_METHOD:-installer}
         katello_admin_username: admin
         katello_admin_password: ${KATELLO_TEST_ADMIN_PASSWORD}
         katello_initial_organization: Molecule Org

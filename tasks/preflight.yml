@@ -32,12 +32,12 @@
 - name: Collect failed pre-flight checks
   vars:
     _checks:
-      - ok: "{{ ansible_facts['memtotal_mb'] | int >= katello_min_memory_mb | int }}"
-        msg: "At least {{ katello_min_memory_mb }} MB RAM is required (found {{ ansible_facts['memtotal_mb'] }} MB)."
-      - ok: "{{ ansible_facts['swaptotal_mb'] | int >= katello_min_swap_mb | int }}"
-        msg: "At least {{ katello_min_swap_mb }} MB swap is required (found {{ ansible_facts['swaptotal_mb'] }} MB)."
-      - ok: "{{ ansible_facts['processor_vcpus'] | default(ansible_facts['processor_count']) | int >= katello_min_cpus | int }}"
-        msg: "At least {{ katello_min_cpus }} CPU cores are required."
+      - ok: "{{ _katello_host_memory_mb | int >= katello_min_memory_mb | int }}"
+        msg: "At least {{ katello_min_memory_mb }} MB RAM is required (found {{ _katello_host_memory_mb }} MB)."
+      - ok: "{{ _katello_host_swap_mb | int >= katello_min_swap_mb | int }}"
+        msg: "At least {{ katello_min_swap_mb }} MB swap is required (found {{ _katello_host_swap_mb }} MB)."
+      - ok: "{{ _katello_host_cpus | int >= katello_min_cpus | int }}"
+        msg: "At least {{ katello_min_cpus }} CPU cores are required (found {{ _katello_host_cpus }})."
       - ok: "{{ ansible_facts['selinux']['status'] | default('disabled') != 'disabled' }}"
         msg: "SELinux must be enforcing or permissive, not disabled."
       - ok: "{{ 'epel-release' not in ansible_facts['packages'] }}"

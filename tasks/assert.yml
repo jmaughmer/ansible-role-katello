@@ -79,6 +79,18 @@
       (see "foremanctl features").
     quiet: true
 
+- name: Assert the foremanctl settings use foremanctl
+  ansible.builtin.assert:
+    that:
+      - katello_install_method == 'foremanctl'
+        or (katello_foremanctl_features + katello_foremanctl_server_aliases + katello_foremanctl_extra_args) | length == 0
+      - katello_foremanctl_features | reject('match', '^[a-z0-9_/-]+$') | list | length == 0
+    fail_msg: >-
+      katello_foremanctl_features, katello_foremanctl_server_aliases and katello_foremanctl_extra_args
+      only work with katello_install_method: foremanctl, and feature names may only use lowercase
+      letters, digits, hyphens, underscores and slashes (see "foremanctl features").
+    quiet: true
+
 - name: Assert the tuning settings fit the deployment
   ansible.builtin.assert:
     that:

@@ -1,0 +1,16 @@
+---
+- name: Pick a tuning profile for {{ _katello_test_case.name }}
+  ansible.builtin.include_role:
+    name: ansible-role-katello
+    tasks_from: tuning.yml
+  vars:
+    katello_tuning: auto
+    katello_managed_hosts: "{{ _katello_test_case.hosts }}"
+    _katello_host_cpus: "{{ _katello_test_case.cpus | default(4) }}"
+    _katello_host_memory_mb: "{{ _katello_test_case.memory_mb | default(20480) }}"
+
+- name: Assert the tuning profile picked for {{ _katello_test_case.name }}
+  ansible.builtin.assert:
+    that:
+      - _katello_tuning_profile == _katello_test_case.expected
+    fail_msg: "Expected {{ _katello_test_case.expected }}, got {{ _katello_tuning_profile }}."
