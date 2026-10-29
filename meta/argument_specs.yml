@@ -135,15 +135,15 @@ argument_specs:
       katello_tuning_puma_threads:
         type: int
         default: 16
-        description: Puma threads per worker (0 keeps the installer default).
+        description: Puma threads per worker (0 keeps the installer default; foremanctl ignores it).
       katello_tuning_puma_workers:
         type: int
         default: 0
-        description: Puma workers (0 keeps the installer auto-tuning).
+        description: Puma workers for both methods (0 keeps the installer auto-tuning).
       katello_tuning_dynflow_workers:
         type: int
         default: 3
-        description: Dynflow worker instances (0 keeps the installer default).
+        description: Dynflow worker instances (0 keeps the installer default; foremanctl ignores it).
       katello_tuning_postgresql:
         type: bool
         default: true
