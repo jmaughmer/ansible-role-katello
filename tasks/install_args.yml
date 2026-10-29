@@ -34,6 +34,10 @@
             if katello_tuning_puma_workers | int > 0 else [])
          + (['--foreman-dynflow-worker-instances', katello_tuning_dynflow_workers | string]
             if katello_tuning_dynflow_workers | int > 0 else []) }}
+    # foremanctl has no options for the Puma threads or the Dynflow workers.
+    _katello_tuning_foremanctl_args: >-
+      {{ ['--foreman-puma-workers', katello_tuning_puma_workers | string]
+         if katello_tuning_puma_workers | int > 0 else [] }}
 
 - name: Build the foreman-installer arguments for a server
   ansible.builtin.set_fact:
@@ -66,6 +70,7 @@
          + (_katello_foremanctl_features | map('regex_replace', '^', '--add-feature=') | list)
          + (katello_foremanctl_server_aliases | map('regex_replace', '^', '--server-alias=') | list)
          + _katello_tuning_args
+         + _katello_tuning_foremanctl_args
          + katello_foremanctl_extra_args }}
     _katello_install_initial_args:
       - --initial-organization
@@ -138,12 +143,18 @@
   when: katello_install_method == 'foremanctl'
 
 # foremanctl adds --add-feature and --server-alias values to the ones it kept,
-# so the ones that are no longer listed must be removed.
-- name: Find the foremanctl features and server aliases that are no longer listed
+# so the ones that are no longer listed must be removed. It also keeps the
+# Puma workers, so going back to 0 resets them to its own calculation.
+- name: Find the foremanctl features, server aliases and settings that are no longer listed
   ansible.builtin.set_fact:
     _katello_foremanctl_stale_features: "{{ _katello_kept.features | default([]) | reject('in', _katello_foremanctl_features) | list }}"
     _katello_foremanctl_kept_aliases: "{{ _katello_kept.server_aliases | default([]) | select('in', _katello_wanted_aliases) | list }}"
     _katello_foremanctl_stale_aliases: "{{ _katello_kept.server_aliases | default([]) | reject('in', _katello_wanted_aliases) | list }}"
+    _katello_foremanctl_reset_args: >-
+      {{ ['--reset-foreman-puma-workers']
+         if (katello_deployment == 'server' and katello_tuning_puma_workers | int == 0
+             and _katello_kept.foreman_puma_workers is defined)
+         else [] }}
   vars:
     _katello_kept: >-
       {{ ((_katello_foremanctl_params.content | b64decode | from_yaml) or {})
@@ -174,8 +185,9 @@
   failed_when: false
 
 # Replacing the certificate of an installed server needs the update flags, and
-# removing foremanctl features needs --remove-feature. They are not part of the
-# fingerprint, which would change after the run that applied them.
+# removing foremanctl features or settings needs --remove-feature or --reset-*.
+# They are not part of the fingerprint, which would change after the run that
+# applied them.
 - name: Add the flags that only apply to this run
   ansible.builtin.set_fact:
     _katello_install_runtime_args: >-
@@ -183,7 +195,8 @@
           if (katello_deployment == 'server' and katello_install_method == 'installer'
               and katello_ssl_mode != 'default' and _katello_last_install.content is defined)
           else [])
-         + ((_katello_foremanctl_stale_features | map('regex_replace', '^', '--remove-feature=') | list)
+         + ((_katello_foremanctl_stale_features | map('regex_replace', '^', '--remove-feature=') | list
+             + _katello_foremanctl_reset_args)
             if katello_install_method == 'foremanctl' else []) }}
     _katello_install_needed: >-
       {{ katello_force_install | bool

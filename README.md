@@ -131,17 +131,20 @@ profile's minimums (with 5% slack on RAM), so a `large` profile on a 32 GB
 server fails before installing. Smart proxies cannot use profiles; the role
 rejects `katello_tuning` on a proxy.
 
-**Recommended settings** (installer method), on by default:
+**Recommended settings**, on by default:
 
-| Variable | Default | Installer setting |
-| --- | --- | --- |
-| `katello_tuning_puma_threads` | `16` | `--foreman-foreman-service-puma-threads-max` |
-| `katello_tuning_puma_workers` | `0` (auto) | `--foreman-foreman-service-puma-workers` |
-| `katello_tuning_dynflow_workers` | `3` | `--foreman-dynflow-worker-instances` |
-| `katello_tuning_postgresql` | `true` | `max_connections: 1000`, `shared_buffers: 2GB`, `work_mem: 8MB`, `autovacuum_vacuum_cost_limit: 2000` in `custom-hiera.yaml`, for medium and larger profiles |
+| Variable | Default | `foreman-installer` setting | `foremanctl` setting |
+| --- | --- | --- | --- |
+| `katello_tuning_puma_threads` | `16` | `--foreman-foreman-service-puma-threads-max` | none |
+| `katello_tuning_puma_workers` | `0` (auto) | `--foreman-foreman-service-puma-workers` | `--foreman-puma-workers` |
+| `katello_tuning_dynflow_workers` | `3` | `--foreman-dynflow-worker-instances` | none |
+| `katello_tuning_postgresql` | `true` | `max_connections: 1000`, `shared_buffers: 2GB`, `work_mem: 8MB`, `autovacuum_vacuum_cost_limit: 2000` in `custom-hiera.yaml`, for medium and larger profiles | none |
 
 Set a number to `0` (or `katello_tuning_postgresql: false`) to keep the
-installer's default. `katello_tuning_postgresql_settings` overrides the
+installer's default. With `foremanctl`, setting `katello_tuning_puma_workers`
+back to `0` resets the worker count to foremanctl's own calculation
+(`--reset-foreman-puma-workers`), and the settings it has no option for are
+ignored; its tuning profiles set the PostgreSQL values. `katello_tuning_postgresql_settings` overrides the
 PostgreSQL values, and `katello_custom_hiera` adds any other Hiera keys from
 the guide, for example:
 
@@ -560,10 +563,11 @@ checks that:
   certificate names the server and verifies against its CA
 - `katello_custom_hiera`, the RPM installer, installer plugin lists and a
   malformed feature name are rejected on EL10
-- the `foremanctl deploy` command: certificate, feature, alias and tuning
-  options, underscores in feature names, the `--initial-*` options kept out of
-  the fingerprint, and, given the parameters of an earlier foremanctl run,
-  `--remove-feature` and the alias removal for entries no longer listed
+- the `foremanctl deploy` command: certificate, feature, alias, tuning and
+  Puma worker options, underscores in feature names, the `--initial-*` options
+  kept out of the fingerprint, and, given the parameters of an earlier
+  foremanctl run, `--remove-feature`, the alias removal and
+  `--reset-foreman-puma-workers` for entries no longer set
 - the `foremanctl deploy-proxy` command, and the proxy checks: a proxy whose
   certificate mode fits the server passes, while one that does not, one on
   another EL version and one for a server that was never deployed fail

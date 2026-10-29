@@ -91,11 +91,13 @@ katello_install_timeout: 7200
 katello_tuning: ""
 katello_managed_hosts: 0
 
-# Recommended settings from "Tuning performance" (installer method only).
+# Recommended settings from "Tuning performance". foremanctl only has an
+# option for the Puma workers; it ignores the other settings.
 # Set a value to 0 or false to leave the installer default.
 # Puma threads per worker (the guide recommends 16 for every profile).
 katello_tuning_puma_threads: 16
-# Puma workers. 0 keeps the installer's auto-tuning, min(CPUs * 1.5, RAM GB - 1.5).
+# Puma workers (both methods). 0 keeps the installer's auto-tuning,
+# min(CPUs * 1.5, RAM GB - 1.5), which foremanctl caps at 32.
 katello_tuning_puma_workers: 0
 # Dynflow (Sidekiq) worker instances (the guide recommends 3).
 katello_tuning_dynflow_workers: 3

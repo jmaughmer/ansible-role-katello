@@ -259,6 +259,9 @@
           - "'--add-feature=remote-execution' in _katello_install_args"
           - "'--server-alias=katello-alias.example.test' in _katello_install_args"
           - "'--tuning medium' in _katello_test_command"
+          # foremanctl has no options for these, and 0 workers keeps its own count.
+          - "'puma' not in _katello_test_command"
+          - "'dynflow' not in _katello_test_command"
           - "'initial' not in _katello_test_command"
           - _katello_install_initial_args == _katello_test_initial_args
           - _katello_install_secret_args | length == 2
@@ -295,6 +298,21 @@
       vars:
         _katello_test_features: "{{ _katello_install_args | select('match', '^--add-feature=') | list }}"
 
+    - name: Build the command with a Puma worker count
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: install_args.yml
+      vars:
+        katello_tuning_puma_workers: 6
+
+    - name: Assert the Puma workers are passed and change the fingerprint
+      ansible.builtin.assert:
+        that:
+          - "'--foreman-puma-workers 6' in _katello_install_args | join(' ')"
+          - _katello_install_runtime_args == []
+          - _katello_install_fingerprint != _katello_test_fingerprint
+        fail_msg: "{{ _katello_install_args }}"
+
     - name: Create the foremanctl state directory
       ansible.builtin.file:
         path: "{{ _katello_test_params_file | dirname }}"
@@ -303,7 +321,8 @@
         group: root
         mode: "0770"
 
-    # What foremanctl keeps after a deploy with one more feature and alias.
+    # What foremanctl keeps after a deploy with one more feature and alias,
+    # and a Puma worker count.
     - name: Write the parameters of an earlier foremanctl run
       ansible.builtin.copy:
         dest: "{{ _katello_test_params_file }}"
@@ -316,6 +335,7 @@
           - remote-execution
           - ansible
           foreman_initial_admin_password: not-a-real-password
+          foreman_puma_workers: 6
           server_aliases:
           - katello-alias.example.test
           - old-alias.example.test
@@ -326,14 +346,27 @@
         name: ansible-role-katello
         tasks_from: install_args.yml
 
-    - name: Assert the feature and alias that are no longer listed are removed
+    - name: Assert the feature, alias and Puma workers that are no longer set are removed
       ansible.builtin.assert:
         that:
-          - _katello_install_runtime_args == ['--remove-feature=ansible']
+          - _katello_install_runtime_args == ['--remove-feature=ansible', '--reset-foreman-puma-workers']
           - _katello_foremanctl_kept_aliases == ['katello-alias.example.test']
           - _katello_foremanctl_stale_aliases == ['old-alias.example.test']
           # Removing them only applies to this run, so it is not fingerprinted.
           - _katello_install_fingerprint == _katello_test_fingerprint
+        fail_msg: "{{ _katello_install_runtime_args }}"
+
+    - name: Build the command with the Puma worker count foremanctl kept
+      ansible.builtin.include_role:
+        name: ansible-role-katello
+        tasks_from: install_args.yml
+      vars:
+        katello_tuning_puma_workers: 6
+
+    - name: Assert the Puma workers are not reset while they are set
+      ansible.builtin.assert:
+        that:
+          - _katello_install_runtime_args == ['--remove-feature=ansible']
         fail_msg: "{{ _katello_install_runtime_args }}"
 
     - name: Build the command with other initial settings and admin password
@@ -363,7 +396,7 @@
     - name: Assert every kept feature and alias is removed and the fingerprint changes
       ansible.builtin.assert:
         that:
-          - _katello_install_runtime_args == ['--remove-feature=remote-execution', '--remove-feature=ansible']
+          - _katello_install_runtime_args == ['--remove-feature=remote-execution', '--remove-feature=ansible', '--reset-foreman-puma-workers']
           - _katello_foremanctl_kept_aliases == []
           - _katello_foremanctl_stale_aliases | length == 2
           - _katello_install_fingerprint != _katello_test_fingerprint
