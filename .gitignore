@@ -1,6 +1,8 @@
 inventory.yml
 *.retry
 .cache/
+.molecule/
 __pycache__/
+*.pyc
 .venv/
 .ansible/
