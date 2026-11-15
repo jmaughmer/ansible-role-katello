@@ -119,11 +119,26 @@
       register: _katello_test_extra_org
       no_log: true
 
-    - name: Assert the extra organization exists with its label
+    - name: Assert the extra organization exists
       ansible.builtin.assert:
         that:
           - _katello_test_extra_org.json.subtotal == 1
-          - _katello_test_extra_org.json.results[0].label == 'molecule_extra_org'
+
+    # The Foreman organization API never returns labels; the Katello one does.
+    - name: Read the extra organization from the Katello API
+      ansible.builtin.uri:
+        url: "{{ _katello_test_url }}/katello/api/v2/organizations/{{ _katello_test_extra_org.json.results[0].id }}"
+        user: "{{ katello_admin_username }}"
+        password: "{{ katello_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: _katello_test_extra_org_detail
+      no_log: true
+
+    - name: Assert the extra organization has its label
+      ansible.builtin.assert:
+        that:
+          - _katello_test_extra_org_detail.json.label == 'molecule_extra_org'
 
     - name: Find the nested location
       ansible.builtin.uri:
