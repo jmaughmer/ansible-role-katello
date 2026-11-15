@@ -22,6 +22,23 @@
       install method as its server, so put both on the same EL major version.
     quiet: true
 
+# The proxy-side bundle tasks sign the proxy certificate with the server's CA
+# and hand it to foreman-proxy-certs-generate based on the PROXY's own
+# katello_ssl_mode. Left at 'default' while the server runs with a
+# role-generated CA, the bundle tool silently mints a fresh CA that the
+# server's certificate is not signed by, and the proxy then fails to verify
+# the server's API TLS during registration, deep inside the installer.
+- name: Assert the proxy uses the same SSL mode as its Katello server
+  ansible.builtin.assert:
+    that:
+      - hostvars[katello_proxy_server]['katello_ssl_mode'] | default('default') == katello_ssl_mode
+    fail_msg: >-
+      The smart proxy uses katello_ssl_mode {{ katello_ssl_mode }} but its Katello server
+      {{ katello_proxy_server }} uses
+      {{ hostvars[katello_proxy_server]['katello_ssl_mode'] | default('default') }}. A proxy
+      must configure the same katello_ssl_mode as its server.
+    quiet: true
+
 - name: Check the Katello server's certificate source
   when: katello_install_method == 'foremanctl'
   block:

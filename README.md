@@ -211,6 +211,10 @@ requirements. It must match the key, the key must not have a passphrase, it
 must not be expired or a CA, it must have the FQDN as a DNS SAN and allow Key
 Encipherment, and it must verify against the CA bundle.
 
+A smart proxy uses the same `katello_ssl_mode` as its Katello server, which
+the role asserts. With `selfsigned`, the proxy's certificate is signed by the
+server's CA and that CA travels to the proxy inside the certificate bundle.
+
 Replacing a certificate (new `katello_ssl_server_cert`, or a renewed selfsigned
 one) re-runs the installer with `--certs-update-server --certs-update-server-ca`.
 After switching away from `default`, registered hosts need the new CA (see
