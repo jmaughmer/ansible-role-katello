@@ -96,6 +96,13 @@ provisioner:
         katello_deployment: proxy
         katello_proxy_server: katello-default-server
         katello_proxy_server_fqdn: katello.example.test
+        # Must match the server: the proxy-side bundle tasks that sign the
+        # proxy certificate with the server's role-generated CA and hand it
+        # to foreman-proxy-certs-generate are gated on this mode. Left at
+        # the default the bundle tool silently mints a fresh CA the server's
+        # certificate is not signed by, and the proxy then cannot verify the
+        # server's API TLS during registration.
+        katello_ssl_mode: selfsigned
 
 verifier:
   name: ansible
