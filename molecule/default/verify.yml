@@ -235,7 +235,12 @@
 
     - name: Count the Dynflow workers
       ansible.builtin.shell:
-        cmd: set -o pipefail && systemctl list-units --all --plain --no-legend 'dynflow-sidekiq@worker-*' | wc -l
+        # The installer always adds a worker-hosts-queue-<n> pool next to the
+        # plain worker-<n> instances the tuning configures, so the glob
+        # pattern is too loose to count.
+        cmd: >-
+          set -o pipefail && systemctl list-units --all --plain --no-legend 'dynflow-sidekiq@worker-*'
+          | awk '/^dynflow-sidekiq@worker-[0-9]+\.service/ {n++} END {print n+0}'
       register: _katello_test_dynflow
       changed_when: false
       when: _katello_test_installer | bool
@@ -245,7 +250,9 @@
         that:
           - (_katello_test_puma.content | b64decode) is search('FOREMAN_PUMA_THREADS_MAX=16')
           - _katello_test_dynflow.stdout | int == 3
-        fail_msg: "{{ _katello_test_puma.content | b64decode }}"
+        fail_msg: >-
+          Puma settings: {{ _katello_test_puma.content | b64decode }}
+          Dynflow worker instances counted: {{ _katello_test_dynflow.stdout }}
       when: _katello_test_installer | bool
 
     - name: Find the internal user
