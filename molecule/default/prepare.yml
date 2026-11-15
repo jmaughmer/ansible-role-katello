@@ -1,5 +1,51 @@
 ---
-- name: Prepare
+# Runs once, after the VMs are created, to bring bare lab clones up to what
+# a real Katello install needs:
+#   - play 1 gets the boxes ansible-ready: the lab templates self-configure
+#     labnet DNS since 2026-11-13, but the resolv.conf task cures a DHCP
+#     hiccup and the dnf priming keeps a boot-time DNS stall from killing
+#     the first metadata fetch (Curl error 6);
+#   - play 2 installs the tools the role's facts rely on and builds the swap
+#     file the pre-flight checks demand (the templates carry none);
+#   - play 3 names each VM after the FQDN the installer installs under and
+#     seeds /etc/hosts with both FQDNs and addresses: labnet DNS does not
+#     register DHCP names, and the pre-flight checks enforce forward DNS,
+#     reverse DNS and the system FQDN through getent, which consults
+#     /etc/hosts first.
+# Privilege comes from the scenario's group_vars (ansible_become), because
+# the driver's SSH lands as a sudo user.
+- name: Get the VMs ready for ansible-core
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH to be up after first boot
+      ansible.builtin.wait_for_connection:
+
+    # The AlmaLinux cloud templates were first booted on the LAN, so they can
+    # carry a stale /etc/resolv.conf that EL9's cloud images never update
+    # (NM dns=none; cloud-init owns the file). Rewrite it from the lease.
+    - name: Point resolv.conf at the labnet DNS from DHCP
+      ansible.builtin.raw: |
+        gw=$(ip -4 route | awk '/default via/ {print $3; exit}')
+        test -n "$gw"
+        dns=""
+        for d in $(nmcli -t -f IP4.DNS device show eth0 | cut -d: -f2); do
+          [ "$d" = "$gw" ] && dns=$d
+        done
+        printf 'nameserver %s\n' "${dns:-$gw}" > /etc/resolv.conf
+      changed_when: true
+
+    # Labnet DNS can hiccup while several VMs boot at once, which used to
+    # kill a first dnf call (Curl error 6). Prime name and metadata here with
+    # bounded retries; the role's dnf then finds fresh metadata.
+    - name: Prime DNS and dnf metadata
+      ansible.builtin.raw: >-
+        /bin/sh -c "for i in 1 2 3 4 5; do
+        if getent hosts mirrors.almalinux.org && dnf -y -q makecache;
+        then exit 0; fi; sleep 10; done; exit 1"
+      changed_when: false
+
+- name: Install the tools and build the swap file
   hosts: all
   gather_facts: false
   tasks:
@@ -11,13 +57,53 @@
           - procps-ng
         state: present
 
-    # A rootless container cannot set the host clock, so chronyd must not try
-    # (-x). The chrony package keeps this file (it is %config(noreplace)).
-    - name: Let chronyd run without changing the clock
-      ansible.builtin.copy:
-        dest: /etc/sysconfig/chronyd
-        content: |
-          OPTIONS="-F 2 -x"
-        owner: root
-        group: root
-        mode: "0644"
+    # The pre-flight checks require at least 3900 MB of swap; the templates
+    # ship none. A plain swap file on the VM's own root filesystem.
+    - name: Create the swap file
+      ansible.builtin.command: dd if=/dev/zero of=/swapfile bs=1M count=4096
+      args:
+        creates: /swapfile
+
+    - name: Set the swap file's mode
+      ansible.builtin.file:
+        path: /swapfile
+        mode: "0600"
+
+    - name: Format and enable the swap file
+      ansible.builtin.shell: |
+        set -o pipefail
+        if swapon --show=NAME --noheadings | grep -qx /swapfile; then
+          echo already
+        else
+          mkswap /swapfile >/dev/null
+          swapon /swapfile
+          echo enabled
+        fi
+      register: _katello_swap
+      changed_when: "'enabled' in _katello_swap.stdout"
+
+    - name: Mount the swap file at boot
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: /swapfile none swap defaults 0 0
+
+- name: Name the hosts for the install
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Seed /etc/hosts with both hosts' FQDNs
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} MOLECULE KATELLO TEST HOSTS"
+        block: |-
+          {% for host in groups['all'] %}
+          {{ hostvars[host].ansible_facts.default_ipv4.address }} {{ hostvars[host].katello_hostname }} {{ hostvars[host].katello_hostname.split('.')[0] }}
+          {% endfor %}
+
+    # The pre-flight checks compare the system FQDN with katello_hostname;
+    # the role would set this too, but facts gathered at the start of the
+    # converge play must already agree.
+    - name: Set the system hostname to the FQDN
+      ansible.builtin.hostname:
+        name: "{{ katello_hostname }}"
+        use: systemd

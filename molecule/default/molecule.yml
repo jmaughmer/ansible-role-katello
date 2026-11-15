@@ -1,71 +1,101 @@
 ---
-# Fast scenario for EL9 and the RPM installer: prepares two systemd
-# containers (Podman), a Katello server (with a role-generated self-signed
-# certificate) and a smart proxy, without running the installer, which needs a
-# full VM with 20 GB RAM. Use the "full" and "proxy" scenarios for real
-# installs. MOLECULE_IMAGE picks another EL9 image.
+# Tests run on the Proxmox test lab: two real KVM VMs cloned from the lab
+# fleet onto the isolated labnet network (EL9, SELinux enforcing, firewalld
+# running), the only setup that can carry a real Katello install:
+#   katello-default-server  the Katello server (20 GB RAM, 4 cores, a 4 GB
+#                           swap file from prepare.yml) — foreman-installer
+#                           runs for real, with the full fixture set below
+#   katello-default-proxy   a smart proxy (12 GB RAM, 4 cores) registered to
+#                           the server over its content-delivery certificate
+# The pre-flight checks are enforced: prepare.yml names each VM after its
+# FQDN and seeds /etc/hosts with both names and addresses, which is what
+# getent-based forward and reverse DNS resolution needs on the lab network
+# (its DHCP names are not registered). Every address the playbooks need
+# comes from gathered facts. All Proxmox connection details live in the
+# driver's secrets file on the control machine, not here.
+#
+# The install itself is slow — expect 1 to 2 hours for a full test run
+# (installer converge plus the idempotence converge).
+#
+# Default VMIDs are the repo's 9311-9312 band, via LAB_VMID_0/1 so the lab's
+# `mlab` runner can claim a free band per run and allow parallel runs of this
+# repo; a plain molecule test uses the pinned band, one lab run at a time.
+# Needs the memory/cores passthrough patch in the molecule-proxmox driver
+# (ct-bootstrap.sh re-applies it after pipx upgrades).
+#
+# Run on the lab's molecule control machine:
+#   /root/labnet/mlab test -s default              # parallel-safe, recommended
+#   molecule test                                  # pinned band
+#
+# The Katello 5.0 installer ships for EL9 only; on EL10 the role installs
+# with foremanctl, which this scenario does not run (see README "Testing").
+role_name_check: 1
+
 dependency:
   name: galaxy
-  options:
-    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/requirements.yml
+  enabled: false        # collections preinstalled on the control machine
+prerun: false
 
 driver:
-  name: podman
+  name: molecule-proxmox
+  options:
+    proxmox_secrets: ${LAB_PROXMOX_SECRETS:-/root/.config/molecule/proxmox-secrets.yml}
+    node: ${LAB_NODE:-galactica}
+    validate_certs: false   # the lab's PVE uses its self-signed cert
+    ssh_user: labadmin
+    ssh_identity_file: /root/.ssh/id_ed25519
+    full: true
+    pool: testlab
+    timeout: 300
 
 platforms:
-  - name: katello-server
-    image: ${MOLECULE_IMAGE:-docker.io/almalinux/9-init}
-    pre_build_image: true
-    hostname: katello.example.test
-    command: /usr/sbin/init
-    systemd: always
-    privileged: true
-  - name: katello-proxy
-    image: ${MOLECULE_IMAGE:-docker.io/almalinux/9-init}
-    pre_build_image: true
-    hostname: proxy.example.test
-    command: /usr/sbin/init
-    systemd: always
-    privileged: true
+  - name: katello-default-server
+    template_name: ${LAB_TEMPLATE:-template-alma9}
+    newid: ${LAB_VMID_0:-9311}
+    groups: [katello_server]
+    memory: 20480
+    cores: 4
+
+  - name: katello-default-proxy
+    template_name: ${LAB_TEMPLATE:-template-alma9}
+    newid: ${LAB_VMID_1:-9312}
+    groups: [katello_proxy]
+    memory: 12288
+    cores: 4
 
 provisioner:
   name: ansible
   env:
-    # The role is the repository itself, so look for it next to the repository.
-    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
+    # The role under test resolves through the sibling role checkouts.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/..:/root/.ansible/roles"
   inventory:
     group_vars:
       all:
-        katello_run_installer: false
-        # A container cannot meet the RAM/SELinux/DNS requirements.
-        katello_preflight_enforce: false
-        # firewalld does not run reliably inside a container.
-        katello_manage_firewall: false
-        katello_upgrade_packages: false
-    host_vars:
-      katello-server:
+        # The driver's SSH lands as a sudo user (unlike a container's root);
+        # make every task of the playbooks become-root.
+        ansible_become: true
+        # Test-only credentials, like the other scenarios' inventory.
+        katello_admin_username: admin
+        katello_admin_password: molecule-admin-password-2026
+        katello_initial_organization: Molecule Org
+        katello_initial_location: Molecule Location
+      katello_server:
+        # The FQDN the installer installs under and every check resolves.
+        # prepare.yml seeds /etc/hosts so forward and reverse resolution and
+        # the system FQDN all agree, which the pre-flight checks enforce.
         katello_hostname: katello.example.test
         katello_ssl_mode: selfsigned
-        katello_ssl_selfsigned_key_size: 2048
-        katello_ssl_extra_sans:
-          - DNS:katello-alias.example.test
-        katello_foreman_plugins: [remote_execution, ansible]
-        katello_tuning: medium
-        katello_custom_hiera:
-          apache::mod::proxy::proxy_timeout: 600
-      katello-proxy:
+      katello_proxy:
         katello_hostname: proxy.example.test
         katello_deployment: proxy
-        katello_proxy_server: katello-server
-        katello_foreman_proxy_plugins: [remote_execution_script]
+        katello_proxy_server: katello-default-server
+        katello_proxy_server_fqdn: katello.example.test
 
 verifier:
   name: ansible
 
 scenario:
   test_sequence:
-    - dependency
-    - cleanup
     - destroy
     - syntax
     - create
@@ -73,5 +103,4 @@ scenario:
     - converge
     - idempotence
     - verify
-    - cleanup
     - destroy

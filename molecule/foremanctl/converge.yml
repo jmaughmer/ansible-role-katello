@@ -1,9 +1,0 @@
----
-- name: Converge
-  hosts: all
-  tasks:
-    # katello_install_method is left unset, so this also checks that EL10
-    # picks foremanctl.
-    - name: Include the katello role
-      ansible.builtin.include_role:
-        name: ansible-role-katello

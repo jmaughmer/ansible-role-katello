@@ -487,159 +487,69 @@ katello_usergroups:
 - LDAP `group_mappings` is still there for the simple case; a group can
   appear in both places, and keys left out in one do not reset the other.
 
-## Testing with Molecule
+## Testing
 
-Molecule runs from the repository root. The `default` and `foremanctl`
-scenarios use rootless Podman. On Windows, run them in WSL2 (for example
-AlmaLinux 10 with `podman` installed); Ansible does not run natively on Windows.
+[`molecule/default/`](molecule/default/) runs the role for real on the Proxmox test lab: two
+VMs cloned from the lab's fleet onto its isolated labnet network — `katello-default-server`
+(20 GB RAM, 4 cores, a swap file) and `katello-default-proxy` (12 GB RAM, 4 cores), both
+AlmaLinux 9, SELinux enforcing and firewalld running. [`prepare.yml`](molecule/default/prepare.yml)
+gets the boxes dnf-ready, builds the 4 GB swap file, sets each VM's hostname to its FQDN and
+seeds `/etc/hosts` with both FQDNs and addresses — the RAM, swap, CPU, SELinux, forward-DNS,
+reverse-DNS and system-FQDN pre-flight checks are all enforced (the lab's DHCP names are not
+registered in DNS, and `getent` consults `/etc/hosts` first). Converge runs the real
+`foreman-installer --scenario katello` on the server (`katello_ssl_mode: selfsigned`,
+`katello_tuning: auto`) and registers the smart proxy to it. The sequence is destroy → syntax →
+create → prepare → converge → idempotence (a second converge must change nothing) → verify →
+destroy, and [`verify.yml`](molecule/default/verify.yml) checks:
 
-```bash
-ansible-galaxy collection install containers.podman   # used by the Podman driver
-molecule test                  # default scenario (EL9, installer)
-molecule test -s foremanctl    # foremanctl scenario (EL10)
-molecule test -s full          # full install on a VM
-```
+- `/api/v2/ping` reports every service `ok`, the Katello plugin is 5.0.x, and the install
+  fingerprint was recorded;
+- the extra organization, the nested locations, the internal user (details, role, organizations,
+  default organization, and a login with its password), the admin user, and the two nested user
+  groups with their members and roles exist as configured;
+- the AlmaLinux GPG key, the product using it and the on-demand BaseOS repository exist;
+- the `katello` tuned profile is active with THP off, Puma runs 16 threads and Dynflow 3 workers;
+- the proxy is registered with the Pulpcore feature in the initial organization and location,
+  and server and proxy certificates come from the same role-generated CA.
 
-Negative tests check which assertion failed, so a test only passes when the
-role rejects the input for the expected reason. The container scenarios use
-AlmaLinux: RHEL UBI images lack packages the role installs (such as
-`chrony`), so test RHEL with the `full` and `proxy` scenarios on subscribed
-VMs.
+Two optional environment hooks add fixtures to a run and are skipped when unset:
+`KATELLO_TEST_LDAP_HOST` (with `KATELLO_TEST_LDAP_ACCOUNT`, `KATELLO_TEST_LDAP_PASSWORD`,
+`KATELLO_TEST_LDAP_BASE_DN` and friends) deploys a `Molecule LDAP` auth source and checks the
+connection, the source in every organization and the admin group mapping;
+`KATELLO_TEST_MANIFEST` (a manifest zip on the control machine, plus `KATELLO_TEST_RH_REPO_LABEL`,
+default `rhel-9-for-x86_64-baseos-rpms`) uploads it to `Molecule Org` and enables the Red Hat
+repository. Both need services the lab does not carry: a reachable LDAP/AD server, or a
+subscription-manager host with CDN access.
 
-### `default` scenario (fast, containers, EL9)
-
-Uses two `almalinux/9-init` systemd containers under Podman: a server (with
-`katello_ssl_mode: selfsigned`) and a smart proxy. A container cannot meet the
-RAM, SELinux and DNS requirements or run the installer, so this scenario sets
-`katello_run_installer: false`, turns the pre-flight checks into warnings and
-skips firewalld. It covers everything up to the installer:
-
-- converge, then an idempotence run
-- the repo packages, `foreman-installer-katello`, chrony and the locale are installed
-- `foreman-release` is version 5.0.x
-- the foreman, katello, pulpcore, candlepin and openvox repos are enabled
-- the katello installer scenario exists and chronyd is running
-- the installer did not run
-- the proxy gets `foreman-proxy-content` and not the server packages
-- the self-signed CA and server certificate exist with private keys, the right
-  SANs, key usage and chain; reusing them in `custom` mode passes the checks,
-  while a wrong key or a certificate for another hostname fails them
-- custom mode without a certificate, a proxy pointing at a host outside the
-  inventory, `foremanctl` on EL9, foremanctl features with the RPM installer,
-  and a tuning profile on a proxy are rejected; a proxy on the same EL
-  version as its server passes the proxy checks
-- both hosts get the `katello` tuned profile with THP off; the server's
-  `custom-hiera.yaml` gets the medium-profile PostgreSQL settings and the
-  extra Hiera key, and the proxy's is untouched
-- an empty admin password, a short uppercase hostname, an incomplete LDAP
-  source, a credential with two sources and an unknown repository type are
-  rejected; complete LDAP and content configs are accepted
-- an unknown LDAP attribute key, an internal user without a password and a
-  group that contains itself are rejected; a full users, groups and LDAP
-  mapping config is accepted
-- the pre-flight checks report too little RAM, swap and CPU (and stop the run
-  when enforced) and pass a large enough host; `katello_tuning: auto` picks
-  the right profile for host counts and hardware sizes
-- the `foreman-installer` commands for the server and the proxy: certificate,
-  plugin, tuning and proxy options, the `--initial-*` options kept out of the
-  fingerprint (changing them or the admin password keeps it, changing a
-  plugin does not), and `--tuning default` when `katello_tuning` is empty
-
-Override the image with `MOLECULE_IMAGE=...`. It tests the RPM installer, so
-it needs an EL9 image.
-
-### `foremanctl` scenario (fast, containers, EL10)
-
-The same setup as `default` (it reuses its `prepare.yml`), but for the
-`foremanctl` method on `almalinux/10-init` by default. The method is left
-unset, so the run also checks that the role picks `foremanctl` on EL10. It
-checks that:
-
-- `foreman-release` and `katello-repos` match the host's EL version, the
-  Foreman signing key is imported and `foremanctl` is installed, while
-  `foreman-installer-katello`, `foreman-proxy-content` and the OpenVox repo are not
-- no `custom-hiera.yaml` is written and `foremanctl` did not run
-- chronyd runs, the tuned profile disables THP, and the server's self-signed
-  certificate names the server and verifies against its CA
-- `katello_custom_hiera`, the RPM installer, installer plugin lists and a
-  malformed feature name are rejected on EL10
-- the `foremanctl deploy` command: certificate, feature, alias, tuning and
-  Puma worker options, underscores in feature names, the `--initial-*` options
-  kept out of the fingerprint, and, given the parameters of an earlier
-  foremanctl run, `--remove-feature`, the alias removal and
-  `--reset-foreman-puma-workers` for entries no longer set
-- the `foremanctl deploy-proxy` command, and the proxy checks: a proxy whose
-  certificate mode fits the server passes, while one that does not, one on
-  another EL version and one for a server that was never deployed fail
-
-### `full` scenario (real install, existing VM)
-
-Runs the whole role, including the installer, against a VM you provide
-(RHEL or AlmaLinux 9 with `foreman-installer`, or 10 with `foremanctl`; 20 GB
-RAM, 4 cores, 4 GB swap, a resolvable FQDN, SSH key access). Molecule does not
-create or destroy the VM, so use a throwaway one.
+Tests run on the lab's molecule control machine: `molecule`, `molecule-proxmox` and the role's
+collections (`theforeman.foreman` included) are preinstalled there, and the driver's connection
+secrets and SSH key live only in the control machine's own config files. Nothing lab-specific is
+in this repo beyond the fleet template name and the default VMID band (9311–9312); hosts,
+tokens and subnets never leave the control machine. The Test Lab project's `molecule-labnet/`
+directory documents the lab itself. The real installer is slow: a full test run takes one to
+two hours.
 
 ```bash
-export KATELLO_TEST_HOST=katello.example.com
-export KATELLO_TEST_USER=root
-export KATELLO_TEST_ADMIN_PASSWORD='changeme123'
-molecule test -s full
+molecule test                               # pinned band, one lab run at a time
+/root/labnet/mlab test -s default           # parallel-safe run on the control machine
 ```
 
-It runs converge, idempotence (the second run must skip the installer), then
-checks that `/api/v2/ping` reports every service `ok`, that the
-`Molecule Org` organization exists, and that the Katello plugin is 5.0.x.
-It also creates and checks an extra organization, a nested location, the
-AlmaLinux 9 GPG key, a product using it and an AlmaLinux BaseOS repository
-(not synced), plus an internal user (details, role, organizations, default
-organization, and a login with its password), an admin user, and two nested
-groups with members and roles. It runs with `katello_tuning: auto` and checks that the
-`katello` tuned profile is active with THP off, and (installer) that Puma runs
-16 threads and there are 3 Dynflow workers.
+The VMIDs come from `LAB_VMID_0/1` and default to the pinned 9311–9312 band; the lab's `mlab`
+wrapper claims a free band (and an isolated ephemeral directory) per run.
 
-To include LDAP, also set these and the run adds a `Molecule LDAP` source,
-tests the connection, and checks the source and the `Molecule LDAP Admins`
-admin group exist, and that the source is in every organization and the two
-chosen locations:
+Lint with `yamllint .` and `ansible-lint` (configured by [`.yamllint`](.yamllint) and
+[`.ansible-lint`](.ansible-lint)). There is no CI; run the lint and Molecule from the control
+machine.
 
-```bash
-export KATELLO_TEST_LDAP_HOST=dc01.corp.example.com
-export KATELLO_TEST_LDAP_TYPE=active_directory    # default
-export KATELLO_TEST_LDAP_ACCOUNT=svc-foreman@corp.example.com
-export KATELLO_TEST_LDAP_PASSWORD='...'
-export KATELLO_TEST_LDAP_BASE_DN='DC=corp,DC=example,DC=com'
-export KATELLO_TEST_LDAP_ADMIN_GROUP=katello-admins
-# optional: KATELLO_TEST_LDAP_PORT (636), KATELLO_TEST_LDAP_TLS (true)
-```
+Not covered by the scenario: the EL10 `foremanctl` path — command building, feature handling and
+`foremanctl deploy`/`deploy-proxy` behavior (the removed `foremanctl` container scenario; Katello
+5.0 ships `foreman-installer-katello` for EL9 only); the assertion-rejection matrix (bad LDAP
+sources, credentials, users, tuning-on-proxy, certificate reuse failures) and the
+installer-argument and fingerprint semantics the removed container `default` scenario checked;
+RHEL subscriptions and the UBI-image caveats (the removed `full`/`proxy` bring-your-own-VM
+scenarios covered subscribed RHEL hosts); and live LDAP/AD and Red Hat CDN integration, which
+need those services.
 
-To include Red Hat content (RHEL VM with CDN access), point
-`KATELLO_TEST_MANIFEST` at a manifest zip on the controller. The run uploads it
-to `Molecule Org`, enables `KATELLO_TEST_RH_REPO_LABEL` (default
-`rhel-9-for-x86_64-baseos-rpms`, releasever 9) without syncing, and checks
-both:
-
-```bash
-export KATELLO_TEST_MANIFEST=$HOME/manifest.zip
-export KATELLO_TEST_RH_REPO_LABEL=rhel-9-for-x86_64-baseos-rpms   # default
-```
-
-### `proxy` scenario (server + proxy, existing VMs)
-
-Installs a server and a smart proxy on two VMs you provide, both on the same
-EL major version (server 20 GB RAM, proxy 12 GB), by default with
-`katello_ssl_mode: selfsigned`:
-
-```bash
-export KATELLO_TEST_HOST=katello.example.com
-export KATELLO_TEST_PROXY_HOST=proxy.example.com
-export KATELLO_TEST_ADMIN_PASSWORD='changeme123'
-export KATELLO_TEST_SSL_MODE=selfsigned   # or default
-molecule test -s proxy
-```
-
-It runs converge and idempotence, then checks that the proxy is registered,
-has the Pulpcore feature, is in the initial organization and location, and
-(selfsigned) that the server and proxy certificates come from the same CA.
 
 ## Linting
 
