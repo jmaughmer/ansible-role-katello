@@ -439,7 +439,6 @@
         host: "{{ katello_hostname }}"
         port: 443
       register: _katello_test_proxy_cert
-      delegate_to: localhost
       when: katello_ssl_mode == 'selfsigned'
 
     - name: Read the server's web certificate
@@ -447,7 +446,6 @@
         host: "{{ katello_proxy_server_fqdn }}"
         port: 443
       register: _katello_test_server_cert
-      delegate_to: localhost
       when: katello_ssl_mode == 'selfsigned'
 
     - name: Assert both certificates come from the role-generated CA
