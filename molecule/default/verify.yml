@@ -27,7 +27,7 @@
           - _katello_test_ping.json.results.katello.status == 'ok'
           - _katello_test_ping.json.results.katello.services | dict2items
             | rejectattr('value.status', 'equalto', 'ok') | list | length == 0
-        fail_msg: "{{ _katello_test_ping.json.results }}"
+        fail_msg: "{{ _katello_test_ping.json.results | to_nice_yaml }}"
 
     - name: List organizations as the admin user
       ansible.builtin.uri:
@@ -410,7 +410,7 @@
           - "'Pulpcore' in (_katello_test_proxy.json.features | map(attribute='name') | list)"
           - "'Molecule Org' in (_katello_test_proxy.json.organizations | map(attribute='name') | list)"
           - "'Molecule Location' in (_katello_test_proxy.json.locations | map(attribute='name') | list)"
-        fail_msg: "{{ _katello_test_proxy.json }}"
+        fail_msg: "{{ _katello_test_proxy.json | to_nice_yaml }}"
 
     - name: Read the proxy's web certificate
       community.crypto.get_certificate:
