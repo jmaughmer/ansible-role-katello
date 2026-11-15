@@ -28,6 +28,11 @@
       ansible.builtin.uri:
         url: "https://{{ katello_proxy_server_fqdn }}/api/v2/smart_proxies/{{ _katello_proxy_lookup.json.results[0].id }}/refresh"
         method: PUT
+        # Foreman answers any non-GET request without a JSON media type with
+        # 415 Unsupported Media Type, and the uri module only sets the header
+        # when it sends a body, so state it for this action call.
+        headers:
+          Content-Type: application/json
         user: "{{ katello_admin_username }}"
         password: "{{ katello_admin_password }}"
         force_basic_auth: true
