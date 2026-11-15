@@ -74,8 +74,9 @@ Run these from the repository root. `ansible.cfg` sets `roles_path = ../`, so
 the clone must be in a directory named `ansible-role-katello` for
 `examples/site.yml` to find the role.
 
-The install takes 20 to 60 minutes. The installer runs as an async task, so
-an SSH drop will not kill it.
+The installer runs as an async task, so an SSH drop will not kill it. Expect
+tens of minutes for the install alone; about 10 minutes on the test lab's
+hardware.
 
 ### Main variables
 
@@ -532,8 +533,10 @@ collections (`theforeman.foreman` included) are preinstalled there, and the driv
 secrets and SSH key live only in the control machine's own config files. Nothing lab-specific is
 in this repo beyond the fleet template name and the default VMID band (9311–9312); hosts,
 tokens and subnets never leave the control machine. The Test Lab project's `molecule-labnet/`
-directory documents the lab itself. The real installer is slow: a full test run takes one to
-two hours.
+directory documents the lab itself. A full `molecule test` took 20 minutes on
+the lab's hardware: roughly 4 minutes to clone the two VMs, 3 minutes to
+prepare them, 10 minutes for the converges (the real installers included),
+2 for the idempotence re-run and 1 for verify.
 
 ```bash
 molecule test                               # pinned band, one lab run at a time
