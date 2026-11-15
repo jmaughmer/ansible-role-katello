@@ -79,6 +79,12 @@ provisioner:
         katello_admin_password: molecule-admin-password-2026
         katello_initial_organization: Molecule Org
         katello_initial_location: Molecule Location
+        # Show the installer command output in the molecule log. The role
+        # hides it (it carries the admin password) to protect production
+        # runs; here every credential involved is already committed below,
+        # and a failed converge is only debuggable from the run log when the
+        # installer's own errors are visible in it.
+        katello_no_log: false
       katello_server:
         # The FQDN the installer installs under and every check resolves.
         # prepare.yml seeds /etc/hosts so forward and reverse resolution and
