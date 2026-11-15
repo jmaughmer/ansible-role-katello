@@ -234,10 +234,12 @@ katello_ldap_auth_sources: []
 # source's own account_password_update overrides this).
 katello_ldap_account_password_update: on_create
 # Internal (local) users. Required: login, and password for a new internal
-# user. Optional: firstname, lastname, mail, description, admin (false),
-# roles, organizations/locations (the initial ones), default_organization,
-# default_location, locale, timezone, auth_source (Internal; or the name of an
-# LDAP source to pre-create an LDAP user), password_update and state.
+# user. Foreman itself requires "mail" for a user without an auth source, so
+# internal users must set it too. Optional: firstname, lastname, description,
+# admin (false), roles, organizations/locations (the initial ones),
+# default_organization, default_location, locale, timezone, auth_source
+# (Internal; or the name of an LDAP source to pre-create an LDAP user),
+# password_update and state.
 #
 # katello_users:
 #   - login: jdoe

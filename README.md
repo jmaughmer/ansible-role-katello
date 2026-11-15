@@ -438,7 +438,8 @@ katello_ldap_auth_sources:
 ## Users and user groups
 
 Internal (local) users and user groups are created after the LDAP sources,
-so a user or group can refer to them.
+so a user or group can refer to them. Foreman requires `mail` for a user
+without an auth source, so internal users must set it.
 
 ```yaml
 katello_users:
@@ -453,6 +454,7 @@ katello_users:
     default_organization: Engineering
   - login: svc-ansible
     password: "{{ vault_svc_ansible_password }}"
+    mail: svc-ansible@example.com
     admin: true
   - login: ldap.user            # pre-create an LDAP user (no password)
     auth_source: Corp AD
@@ -505,7 +507,7 @@ destroy, and [`verify.yml`](molecule/default/verify.yml) checks:
 - `/api/v2/ping` reports every service `ok`, the Katello plugin is 5.0.x, and the install
   fingerprint was recorded;
 - the extra organization, the nested locations, the internal user (details, role, organizations,
-  default organization, and a login with its password), the admin user, and the two nested user
+  location, default organization, and a login with its password), the admin user, and the two nested user
   groups with their members and roles exist as configured;
 - the AlmaLinux GPG key, the product using it and the on-demand BaseOS repository exist;
 - the `katello` tuned profile is active with THP off, Puma runs 16 threads and Dynflow 3 workers;

@@ -36,9 +36,11 @@
             mail: molecule.user@example.com
             roles: [Viewer]
             organizations: [Molecule Org, Molecule Extra Org]
+            locations: [Molecule Location]
             default_organization: Molecule Extra Org
           - login: molecule.admin
             password: Molecule-Pass-456
+            mail: molecule.admin@example.com
             admin: true
         katello_usergroups:
           - name: Molecule Helpdesk
